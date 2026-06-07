@@ -1,0 +1,75 @@
+config.go.package = "packet"
+
+# this spec endian is big endian
+# Authentication (e.g. Certificate verification) is thrown to application protocol
+# applications can use Object to exchange such informations
+# this protocol maybe over UDP
+# to derive encryption secret, using HKDF
+# by default, this protocol uses timeout mecanism to close
+# implement explicit close in application level
+
+format IPAddress:
+    len :u8
+    len == 4 || len == 16
+    address :[len]u8
+
+format MacAddress:
+    address :[6]u8
+
+
+format Probe:
+    mac_address :MacAddress
+    ip_address :IPAddress
+    port :u16
+
+enum KeyKind:
+    :u16
+    offset = 0x18 # for future use, currently not used
+    x25519 = 0x34
+    p256 = 0xf9
+    p384 = 0x24
+    p521 = 0x33
+
+enum CommonKeyKind:
+    :u16
+    aes128_gcm = 0x73
+    aes192_gcm = 0x43
+    aes256_gcm = 0x22
+    chacha20_poly1305 = 0x3e
+
+enum PacketKind:
+    :u8
+    handshake = 0x5e
+    handshake_ack = 0x89
+    application = 0x33
+    probe = 0x67 # for broadcast
+
+format Handshake:
+    key_kind :KeyKind
+    common_key_kind :CommonKeyKind
+    if key_kind == KeyKind.offset:
+        offset :u16
+    len :u16
+    key_share :[len]u8 # MUST BE ephemeral
+
+
+format PacketHeader:
+    version :u8
+    kind :PacketKind
+    connection_id :u16
+    len :u16 
+
+format ProtectedHeader:
+    raw_payload :u1
+    nonce_counter :u63
+
+format EncryptedData:
+    nonce_counter :u64 # verify nonce counter before decryption to mitigate replay attack. this field is protected by nonce protection
+    data :[..]u8
+
+format Packet:
+    header :PacketHeader
+    data :[header.len]u8
+
+
+
