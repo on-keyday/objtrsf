@@ -1,0 +1,325 @@
+package trsf
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/on-keyday/objtrsf/objproto"
+	"github.com/on-keyday/objtrsf/trsf/congestion"
+	"github.com/on-keyday/objtrsf/trsf/wire"
+)
+
+// QUICではpacket number spaceごとにACKを管理する必要があるが
+// こちらは必要がないため簡素化
+type SentPacketHandler struct {
+	m             sync.Mutex
+	largestSent   uint64
+	largestAcked  uint64
+	bytesInFlight int
+
+	sentRanges []*SentPacket
+	logger     *slog.Logger
+	rtt        *congestion.RTTStats
+
+	cong congestion.CongestionControl
+
+	lossTime        time.Time
+	multiModalTimer time.Time
+
+	ptoCount int
+
+	*trigger
+}
+
+func NewSentPacketHandler(logger *slog.Logger, rtt *congestion.RTTStats, cong congestion.CongestionControl) *SentPacketHandler {
+	return &SentPacketHandler{
+		logger:  logger,
+		rtt:     rtt,
+		cong:    cong,
+		trigger: newTrigger(),
+	}
+}
+
+type SentPacket struct {
+	OnACK        func(now time.Time)
+	OnLost       func(now time.Time)
+	PacketSize   int
+	StreamID     StreamID
+	PacketNumber objproto.PacketNumber
+	SentTime     time.Time
+	IsMTUProbe   bool
+	Kind         wire.ApplicationPayloadKind
+}
+
+func (ah *SentPacketHandler) GetInternal() ([]InternalSentPacket, int, int, time.Duration, time.Duration) {
+	ah.m.Lock()
+	defer ah.m.Unlock()
+	var sentRanges []InternalSentPacket = make([]InternalSentPacket, 0, len(ah.sentRanges))
+	for _, p := range ah.sentRanges {
+		sentRanges = append(sentRanges, InternalSentPacket{
+			SentTime:   p.SentTime,
+			PacketSize: p.PacketSize,
+			IsMTUProbe: p.IsMTUProbe,
+			Kind:       p.Kind,
+			StreamID:   p.StreamID,
+		})
+	}
+	return sentRanges, ah.bytesInFlight, ah.cong.GetCongestionWindow(), ah.rtt.SRTT, ah.rtt.RTTVAR
+}
+
+func (ah *SentPacketHandler) CanSend() bool {
+	ah.m.Lock()
+	defer ah.m.Unlock()
+	return ah.cong.CanSend(ah.bytesInFlight)
+}
+
+func (ah *SentPacketHandler) LossDetectionTimeout() time.Time {
+	return ah.multiModalTimer
+}
+
+func (ah *SentPacketHandler) PacingTimeout() time.Time {
+	return ah.cong.PacingTimer()
+}
+
+func (ah *SentPacketHandler) addBytesInFlight(size int) {
+	prev := ah.bytesInFlight
+	ah.bytesInFlight += size
+	var sentRanges []int = make([]int, len(ah.sentRanges))
+	sum := 0
+	for i := range ah.sentRanges {
+		if ah.sentRanges[i].IsMTUProbe {
+			continue // ignore MTU probes
+		}
+		sentRanges[i] = int(ah.sentRanges[i].PacketSize)
+		sum += int(ah.sentRanges[i].PacketSize)
+	}
+	if sum != ah.bytesInFlight {
+		ah.logger.Error("Inconsistent bytes in flight", "expected", ah.bytesInFlight, "actual", sum)
+	}
+	ah.logger.Debug("Added bytes in flight", "prev_bytes_in_flight", prev, "bytes_in_flight", ah.bytesInFlight, "ranges", sentRanges)
+}
+
+func (ah *SentPacketHandler) removeBytesInFlight(size int) {
+	prev := ah.bytesInFlight
+	ah.bytesInFlight -= size
+	sum := 0
+	var sentRanges []int = make([]int, len(ah.sentRanges))
+	for i := range ah.sentRanges {
+		if ah.sentRanges[i].IsMTUProbe {
+			continue // ignore MTU probes
+		}
+		sentRanges[i] = int(ah.sentRanges[i].PacketSize)
+		sum += int(ah.sentRanges[i].PacketSize)
+	}
+	if sum != ah.bytesInFlight {
+		ah.logger.Error("Inconsistent bytes in flight", "expected", ah.bytesInFlight, "actual", sum)
+	}
+	ah.logger.Debug("Removed bytes in flight", "prev_bytes_in_flight", prev, "bytes_in_flight", ah.bytesInFlight, "ranges", sentRanges)
+}
+
+func (ah *SentPacketHandler) OnSent(s *SentPacket) error {
+	ah.m.Lock()
+	defer ah.m.Unlock()
+	ah.sentRanges = append(ah.sentRanges, s)
+	if !s.IsMTUProbe {
+		ah.addBytesInFlight(s.PacketSize)
+		ah.cong.RecordSend(s.PacketSize, s.SentTime)
+	}
+	ah.largestSent = max(ah.largestSent, s.PacketNumber)
+	ah.setLossDetectionTimer(s.SentTime)
+	return nil
+}
+
+func (ah *SentPacketHandler) detectAck(rcvTime time.Time, ranges []Range) ([]*SentPacket, error) {
+	var ackedPackets []*SentPacket
+	var newRemainPackets []*SentPacket
+	var ackedPN []objproto.PacketNumber
+	for _, p := range ah.sentRanges {
+		acked := false
+		for i := range ranges {
+			rg := ranges[i]
+			if p.PacketNumber < rg.Begin {
+				// not acked
+				break
+			}
+			if p.PacketNumber >= rg.End {
+				// check next range
+				continue
+			}
+			// acked
+			ackedPackets = append(ackedPackets, p)
+			ackedPN = append(ackedPN, p.PacketNumber)
+			acked = true
+			break
+		}
+		if !acked {
+			newRemainPackets = append(newRemainPackets, p)
+		}
+	}
+	ah.logger.Debug("Processing ACK", "acked_packets", ackedPN)
+	if len(newRemainPackets)+len(ackedPackets) != len(ah.sentRanges) {
+		return nil, errors.New("BUG: inconsistent ack detection")
+	}
+	ah.sentRanges = newRemainPackets
+	sentSize := 0
+	probeSize := 0
+
+	for _, p := range ackedPackets {
+		sentSize += p.PacketSize
+		if p.OnACK != nil {
+			p.OnACK(rcvTime)
+		}
+		if p.IsMTUProbe {
+			probeSize += p.PacketSize
+		}
+	}
+	if len(ackedPackets) > 0 {
+		ah.removeBytesInFlight(sentSize - probeSize)
+		ah.cong.RecordACK(sentSize, rcvTime)
+	}
+	return ackedPackets, nil
+}
+
+const timeThreshold = 9.0 / 8
+
+func (ah *SentPacketHandler) detectLost(now time.Time) {
+	ah.lossTime = time.Time{} // reset
+	maxRTT := float64(max(ah.rtt.LatestRTT, ah.rtt.SRTT))
+	lossDelay := time.Duration(timeThreshold * maxRTT)
+
+	// Minimum time of granularity before packets are deemed lost.
+	lossDelay = max(lossDelay, 1*time.Millisecond)
+
+	// Packets sent before this time are deemed lost.
+	lostSendTime := now.Add(-lossDelay)
+
+	somePacketLost := false
+
+	remainRanges := make([]*SentPacket, 0)
+	lostSize := 0
+	lostCount := 0
+	mtuProbe := 0
+	probeSize := 0
+	for _, p := range ah.sentRanges {
+		if p.PacketNumber > ah.largestAcked {
+			remainRanges = append(remainRanges, p)
+			continue
+		}
+
+		var packetLost bool
+		if !p.SentTime.After(lostSendTime) { // currently, only time threshold
+			packetLost = true
+		} else if ah.lossTime.IsZero() {
+			// Note: This conditional is only entered once per call
+			lossTime := p.SentTime.Add(lossDelay)
+			ah.logger.Debug("Set loss timer", "from_now", lossTime.Sub(now))
+			ah.lossTime = lossTime
+		}
+		if packetLost {
+			somePacketLost = true
+			lostSize += p.PacketSize
+			if p.OnLost != nil {
+				p.OnLost(now) // maybe queueing
+			}
+			lostCount++
+			if p.IsMTUProbe {
+				mtuProbe++
+				probeSize += p.PacketSize
+			}
+		} else {
+			remainRanges = append(remainRanges, p)
+		}
+	}
+	if len(remainRanges)+lostCount != len(ah.sentRanges) {
+		ah.logger.Error("BUG: inconsistent loss detection", "expected", len(ah.sentRanges), "actual", len(remainRanges)+lostCount)
+	}
+	ah.sentRanges = remainRanges
+	if somePacketLost {
+		ah.removeBytesInFlight(lostSize - probeSize)
+		if lostCount > mtuProbe { // ignore congestion for MTU probes
+			ah.cong.RecordLoss(lostSize-probeSize, now)
+		}
+	}
+}
+
+func (ah *SentPacketHandler) setLossDetectionTimer(now time.Time) {
+	defer ah.trigger.Notify()
+	if !ah.lossTime.IsZero() {
+		ah.logger.Debug("Set loss timer", "from_now", ah.lossTime.Sub(now))
+		ah.multiModalTimer = ah.lossTime
+		return
+	}
+	if ah.bytesInFlight == 0 {
+		ah.logger.Debug("No packets in flight, disable loss timer")
+		ah.multiModalTimer = time.Time{}
+		return
+	}
+	pto := ah.rtt.PTO(ah.ptoCount)
+	ah.logger.Debug("Set PTO timer", "from_now", pto)
+	ah.multiModalTimer = now.Add(pto)
+}
+
+func (ah *SentPacketHandler) OnTimeout(now time.Time) (bool, error) {
+	ah.m.Lock()
+	defer ah.m.Unlock()
+	defer ah.setLossDetectionTimer(now)
+	if !ah.lossTime.IsZero() {
+		ah.logger.Debug("Loss timer fired")
+		// Early retransmit or time loss detection
+		ah.detectLost(now)
+		return false, nil
+	}
+
+	// PTO
+	// When all outstanding are acknowledged, the alarm is canceled in setLossDetectionTimer.
+	// However, there's no way to reset the timer in the connection.
+	// When OnLossDetectionTimeout is called, we therefore need to make sure that there are
+	// actually packets outstanding.
+	if ah.bytesInFlight == 0 {
+		return false, errors.New("BUG: no packets in flight")
+	}
+
+	if len(ah.sentRanges) == 0 {
+		return false, nil
+	}
+	ah.ptoCount++
+	ah.logger.Debug("PTO fired, try retransmission")
+	// first, try non MTU probe packet
+	for _, p := range ah.sentRanges {
+		if !p.IsMTUProbe {
+			p.OnLost(now) // trigger retransmission
+			return true, nil
+		}
+	}
+	// all are MTU probes, retransmit the first one
+	ah.sentRanges[0].OnLost(now) // retransmit the first packet
+	return true, nil
+}
+
+func (ah *SentPacketHandler) ReceiveACK(rcvTime time.Time, r []Range) error {
+	ah.m.Lock()
+	defer ah.m.Unlock()
+	largest := r[len(r)-1].End - 1
+	if largest > ah.largestSent {
+		return fmt.Errorf("received invalid ACK: largest acked %d > largest sent %d", largest, ah.largestSent)
+	}
+	ackedPackets, err := ah.detectAck(rcvTime, r)
+	if err != nil {
+		return err
+	}
+	if len(ackedPackets) == 0 {
+		return nil
+	}
+	// largest acked packet time update
+	if lastPacket := ackedPackets[len(ackedPackets)-1]; lastPacket.PacketNumber == objproto.PacketNumber(largest) {
+		ah.rtt.UpdateRTT(ah.logger, rcvTime.Sub(lastPacket.SentTime), rcvTime)
+	}
+	ah.largestAcked = max(ah.largestAcked, largest)
+	ah.detectLost(rcvTime)
+	ah.ptoCount = 0
+	ah.setLossDetectionTimer(rcvTime)
+	return nil
+}

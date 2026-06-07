@@ -1,0 +1,112 @@
+
+config.go.package = "wire"
+
+
+format Varint:
+    prefix :u2
+    match prefix:
+        0 => value :u6
+        1 => value :u14
+        2 => value :u30
+        3 => value :u62
+
+fn varintLen(value :u64) -> u8:
+    return match value:
+        u64(0)..=0x3f => 1
+        u64(0x40)..=0x3fff => 2
+        u64(0x4000)..=0x3fffffff => 4
+        0x40000000..=0x3fffffffffff => 8
+        .. => 0
+
+fn varintPrefix(value :u64) -> u8:
+    len ::= varintLen(value)
+    return match len:
+        1 => 0
+        2 => 1
+        4 => 2
+        8 => 3
+        .. => 0xff
+
+
+format StreamPacket:
+    config.go.union = "noheap"
+    has_id :u1
+    has_offset :u1
+    is_eof :u1
+    is_probe :u1
+    reserved :u4
+    if has_id == 1:
+        id :Varint
+    if has_offset == 1:
+        offset :Varint
+    data :[..]u8
+
+format ACKRange:
+    offset :Varint 
+    delta :Varint
+
+
+format StreamACKPacket:
+    largest_ack :Varint
+    first_delta :Varint
+    len :Varint 
+    ranges :[len.value]ACKRange
+
+format UpdateWindow:
+    id :Varint
+    window_max :Varint
+
+format CancelStreamPacket:
+    id :Varint
+
+# Optional transport-keepalive / teardown bodies. ping/pong/close carry an
+# OPTIONAL rest-of-packet body after the kind byte: a 0-length body is valid
+# (bare keepalive / teardown). A ping initiator MAY send PingBody{nanos}; the
+# responder echoes the received body verbatim in its pong so the initiator can
+# compute RTT (time.Since). close MAY carry a CloseBody for diagnostics.
+enum CloseStatus:
+    :u8
+    ok
+    failed
+
+format PingBody:
+    nanos :u64
+
+format CloseBody:
+    status :CloseStatus
+    message_len :u16
+    message :[message_len]u8
+
+# Transport-only payload kinds (the shared trsf core's whole vocabulary). They
+# occupy the reserved transport range 0x00-0x3F; application kinds live in a
+# repo-local enum at >= 0x40 (harness: appwire.AppKind) so the shared core never
+# needs to know them — AutoReceive handles these and routes everything else out.
+enum ApplicationPayloadKind:
+    :u8
+    ping
+    pong
+    close
+    stream_data
+    stream_cancel
+    stream_ack
+    stream_window_update
+
+
+format PacketHeader:
+    kind :ApplicationPayloadKind
+
+fn isStreamRelated(kind :ApplicationPayloadKind) -> bool:
+    return match kind:
+        ApplicationPayloadKind.stream_data,ApplicationPayloadKind.stream_cancel,
+        ApplicationPayloadKind.stream_ack, ApplicationPayloadKind.stream_window_update => true
+        .. => false
+
+format StreamAppPacket:
+    config.go.union = "noheap"
+    header :PacketHeader
+    match header.kind:
+        ApplicationPayloadKind.stream_data => stream_data :StreamPacket
+        ApplicationPayloadKind.stream_cancel => stream_cancel :CancelStreamPacket
+        ApplicationPayloadKind.stream_ack => stream_ack :StreamACKPacket
+        ApplicationPayloadKind.stream_window_update => window_update :UpdateWindow
+        .. => error("Unexpected packet")
