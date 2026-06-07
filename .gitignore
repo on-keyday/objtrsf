@@ -1,0 +1,12 @@
+# Go build artifacts
+*.o
+*.a
+*.so
+*.test
+*.out
+/bin/
+/build/
+
+# Editor / OS
+.DS_Store
+*.swp
