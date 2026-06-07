@@ -407,7 +407,6 @@ type endpoint struct {
 
 	proxyLock     sync.Mutex
 	proxySettings map[ConnectionID]*proxySetting
-	cookieSecret  []byte
 }
 
 func NewEndpoint(logger *slog.Logger, mode EndpointMode) RawEndpoint {
