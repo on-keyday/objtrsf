@@ -6,90 +6,13 @@ import (
 	"io"
 	"log/slog"
 	"math/rand"
-	"os"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/on-keyday/objtrsf/objproto"
 	"github.com/on-keyday/objtrsf/trsf"
+	"github.com/on-keyday/objtrsf/trsf/mock"
 	"github.com/on-keyday/objtrsf/trsf/wire"
 )
-
-// --- mock transport helpers ---------------------------------------------
-//
-// objtrsf has no trsf/mock package (unlike ksdk). These helpers reproduce
-// ksdk's mock.* API locally so the ported behavioral tests can drive two
-// Streams against each other. The objtrsf Transport.Send(msg *objproto.Message)
-// is the receive-side injector: an UnderlayingSendTransport here delivers the
-// raw bytes to the peer Transport's Send.
-
-type mockUnderlayingTransport struct {
-	peer trsf.Transport
-}
-
-func (m *mockUnderlayingTransport) SendMessage(data []byte) (int, objproto.PacketNumber, error) {
-	return m.SendMessageWithPacketNumber(data, 0)
-}
-
-func (m *mockUnderlayingTransport) SendMessageWithPacketNumber(data []byte, pn objproto.PacketNumber) (int, objproto.PacketNumber, error) {
-	if m.peer == nil {
-		return 0, 0, nil
-	}
-	m.peer.Send(&objproto.Message{
-		Data:         data,
-		PacketNumber: pn,
-	})
-	return len(data), pn, nil
-}
-
-type mockPacketNumberIssuer struct {
-	current atomic.Uint64
-}
-
-func (m *mockPacketNumberIssuer) ConsumePacketNumber() objproto.PacketNumber {
-	return m.current.Add(1) - 1
-}
-
-func setupClientServer(t *testing.T) (trsf.Transport, trsf.Transport) {
-	return setupClientServerEx(t, slog.LevelDebug)
-}
-
-func setupClientServerEx(t *testing.T, logLevel slog.Level) (trsf.Transport, trsf.Transport) {
-	debugLogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})).With("test", t.Name())
-	ctx := t.Context()
-	client := trsf.NewStreams(ctx, false, 1200, 1500, &mockPacketNumberIssuer{}, debugLogger.With("role", "client"))
-	if client == nil {
-		t.Fatal("failed to create client streams")
-	}
-	server := trsf.NewStreams(ctx, true, 1200, 1500, &mockPacketNumberIssuer{}, debugLogger.With("role", "server"))
-	if server == nil {
-		t.Fatal("failed to create server streams")
-	}
-	return client, server
-}
-
-func backgroundIO(t *testing.T, peer1, peer2 trsf.Transport) {
-	ctx := t.Context()
-	go func() {
-		for {
-			pkt := peer1.Recv(ctx)
-			if pkt == nil {
-				return
-			}
-			pkt.Send(ctx, &mockUnderlayingTransport{peer: peer2})
-		}
-	}()
-	go func() {
-		for {
-			pkt := peer2.Recv(ctx)
-			if pkt == nil {
-				return
-			}
-			pkt.Send(ctx, &mockUnderlayingTransport{peer: peer1})
-		}
-	}()
-}
 
 // --- SendAction inspection helpers --------------------------------------
 //
@@ -144,7 +67,7 @@ func recvSkipProbe(ctx context.Context, t trsf.Transport) *trsf.SendAction {
 
 func TestConn(t *testing.T) {
 	ctx := t.Context()
-	client, server := setupClientServer(t)
+	client, server := mock.SetupClientServer(t)
 	sendStream := client.CreateSendStream()
 	if sendStream == nil {
 		t.Fatal("failed to create send stream")
@@ -160,7 +83,7 @@ func TestConn(t *testing.T) {
 	if pkt.ACK != nil {
 		t.Fatal("unexpected ACK packet received by client")
 	}
-	pkt.Send(ctx, &mockUnderlayingTransport{peer: server})
+	pkt.Send(ctx, &mock.MockUnderlayingTransport{Peer: server})
 	recvStream, err := server.AcceptReceiveStream(ctx)
 	if err != nil {
 		t.Fatalf("failed to accept receive stream: %v", err)
@@ -183,11 +106,11 @@ func TestConn(t *testing.T) {
 
 func TestBidirectionalStream(t *testing.T) {
 	ctx := t.Context()
-	client, server := setupClientServer(t)
+	client, server := mock.SetupClientServer(t)
 	// 手動 pkt drain だと MTU probe / ACK / データの delivery 順を test 側で
 	// 完全に追えないので BackgroundIO で双方向に流す。これで MTU probe が
 	// データ packet として届いて test の終了条件を誤判定するバグも回避できる。
-	backgroundIO(t, client, server)
+	mock.BackgroundIO(t, client, server)
 	bidiStream := client.CreateBidirectionalStream()
 	if bidiStream == nil {
 		t.Fatal("failed to create bidirectional stream")
@@ -233,7 +156,7 @@ func TestBidirectionalStream(t *testing.T) {
 // simulate loss and retransmission
 func TestLossAndRetransmission(t *testing.T) {
 	ctx := t.Context()
-	client, server := setupClientServer(t)
+	client, server := mock.SetupClientServer(t)
 	sendStream := client.CreateSendStream()
 	if sendStream == nil {
 		t.Fatal("failed to create send stream")
@@ -250,7 +173,7 @@ func TestLossAndRetransmission(t *testing.T) {
 		t.Fatal("unexpected ACK packet received by client")
 	}
 	// simulate sending but losing the packet
-	pkt.Send(ctx, &mockUnderlayingTransport{peer: nil})
+	pkt.Send(ctx, &mock.MockUnderlayingTransport{Peer: nil})
 	// retransmit the packet
 	pkt = recvSkipProbe(ctx, client)
 	if pkt == nil {
@@ -262,7 +185,7 @@ func TestLossAndRetransmission(t *testing.T) {
 	if pkt.ACK != nil {
 		t.Fatal("unexpected ACK packet received by client on retransmission")
 	}
-	pkt.Send(ctx, &mockUnderlayingTransport{peer: server})
+	pkt.Send(ctx, &mock.MockUnderlayingTransport{Peer: server})
 	recvStream, err := server.AcceptReceiveStream(ctx)
 	if err != nil {
 		t.Fatalf("failed to accept receive stream: %v", err)
@@ -286,7 +209,7 @@ func TestLossAndRetransmission(t *testing.T) {
 func TestLossTimer(t *testing.T) {
 	// second send will success, first send will fail then retransmit
 	ctx := t.Context()
-	client, server := setupClientServer(t)
+	client, server := mock.SetupClientServer(t)
 	sendStream := client.CreateSendStream()
 	if sendStream == nil {
 		t.Fatal("failed to create send stream")
@@ -300,13 +223,13 @@ func TestLossTimer(t *testing.T) {
 		t.Fatal("client failed to receive first packet")
 	}
 	// send but lose the first packet
-	pkt1.Send(ctx, &mockUnderlayingTransport{peer: nil})
+	pkt1.Send(ctx, &mock.MockUnderlayingTransport{Peer: nil})
 	// second packet (to be received)
 	pkt2 := recvSkipProbe(ctx, client)
 	if pkt2 == nil {
 		t.Fatal("client failed to receive second packet")
 	}
-	pkt2.Send(ctx, &mockUnderlayingTransport{peer: server})
+	pkt2.Send(ctx, &mock.MockUnderlayingTransport{Peer: server})
 	recvStream, err := server.AcceptReceiveStream(ctx)
 	if err != nil {
 		t.Fatalf("failed to accept receive stream: %v", err)
@@ -322,12 +245,12 @@ func TestLossTimer(t *testing.T) {
 	if servPkt == nil {
 		t.Fatal("server failed to receive packet")
 	}
-	servPkt.Send(ctx, &mockUnderlayingTransport{peer: client})
+	servPkt.Send(ctx, &mock.MockUnderlayingTransport{Peer: client})
 	retrPkt := recvSkipProbe(ctx, client)
 	if retrPkt == nil {
 		t.Fatal("client failed to receive retransmitted packet")
 	}
-	retrPkt.Send(ctx, &mockUnderlayingTransport{peer: server})
+	retrPkt.Send(ctx, &mock.MockUnderlayingTransport{Peer: server})
 	recvData := make([]byte, 35)
 	n, err := recvStream.Read(recvData)
 	if err != nil {
@@ -346,13 +269,13 @@ func TestLossTimer(t *testing.T) {
 	if ackPkt.ACK == nil {
 		t.Fatal("expected ACK packet not received by server")
 	}
-	ackPkt.Send(ctx, &mockUnderlayingTransport{peer: client})
+	ackPkt.Send(ctx, &mock.MockUnderlayingTransport{Peer: client})
 }
 
 // send large data
 func testLargeDataInLoss(t *testing.T, lossRate float64, dataSize int, logLevel slog.Level) {
 	ctx := t.Context()
-	client, server := setupClientServerEx(t, logLevel)
+	client, server := mock.SetupClientServerEx(t, logLevel)
 	sendStream := client.CreateSendStream()
 	if sendStream == nil {
 		t.Fatal("failed to create send stream")
@@ -384,7 +307,7 @@ func testLargeDataInLoss(t *testing.T, lossRate float64, dataSize int, logLevel 
 			if rand.Float64() < lossRate {
 				continue // loss
 			}
-			r.Send(ctx, &mockUnderlayingTransport{peer: client})
+			r.Send(ctx, &mock.MockUnderlayingTransport{Peer: client})
 		}
 	}()
 	largeData := bytes.Repeat([]byte("A"), dataSize)
@@ -397,7 +320,7 @@ func testLargeDataInLoss(t *testing.T, lossRate float64, dataSize int, logLevel 
 		if pkt == nil {
 			continue
 		}
-		pkt.Send(ctx, &mockUnderlayingTransport{peer: server})
+		pkt.Send(ctx, &mock.MockUnderlayingTransport{Peer: server})
 	}
 }
 
@@ -418,8 +341,8 @@ func TestLargeDataNoLoss(t *testing.T) {
 
 func TestCancel(t *testing.T) {
 	ctx := t.Context()
-	client, server := setupClientServer(t)
-	backgroundIO(t, client, server)
+	client, server := mock.SetupClientServer(t)
+	mock.BackgroundIO(t, client, server)
 	sendStream := client.CreateSendStream()
 	if sendStream == nil {
 		t.Fatal("failed to create send stream")
