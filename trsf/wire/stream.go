@@ -340,7 +340,7 @@ func VarintLen(Value uint64) uint8 {
 		tmp89 = 2
 	} else if (uint64(16384) <= Value) && (Value <= 1073741823) {
 		tmp89 = 4
-	} else if (1073741824 <= Value) && (Value <= 70368744177663) {
+	} else if (1073741824 <= Value) && (Value <= 4611686018427387903) {
 		tmp89 = 8
 	} else {
 		tmp89 = 0
