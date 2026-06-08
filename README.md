@@ -3,11 +3,15 @@
 A reusable, self-contained transport stack, originally developed for
 `github.com/on-keyday/agent-harness` and shared with related projects.
 
-- `objproto/` — encrypted UDP object protocol: an authenticated-encryption
-  datagram layer (AEAD + packet numbers + replay/dedup + a reorder buffer). It is
-  best-effort, **not** reliable — there is no retransmission or loss recovery
-  here. The handshake is an anonymous ECDH exchange; **authentication is delegated
-  to the application layer** (the wire intentionally carries no peer auth).
+- `transport/` — pluggable byte-transport endpoints that objproto runs over:
+  UDP (with PMTUD), WebSocket (including a `GOOS=js`/wasm build), a UDP+WebSocket
+  dual stack, and an in-memory pipe for tests. Each yields an `objproto.Endpoint`.
+- `objproto/` — encrypted object protocol: an authenticated-encryption datagram
+  layer (AEAD + packet numbers + replay/dedup + a reorder buffer) carried over any
+  `transport/` endpoint. It is best-effort, **not** reliable — there is no
+  retransmission or loss recovery here. The handshake is an anonymous ECDH
+  exchange; **authentication is delegated to the application layer** (the wire
+  intentionally carries no peer auth).
 - `trsf/` — QUIC-like **reliable** multiplexed transport layered over objproto;
   this is where reliable delivery lives: streams, retransmission/ack handling,
   congestion control, flow control, MTU probing.
