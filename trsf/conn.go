@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/on-keyday/objtrsf/objproto"
@@ -106,6 +107,12 @@ type Streams struct {
 	pnIssuer PacketNumberIssuer
 
 	mtu *mtu.MTUTracker
+
+	// loopIter counts run-loop iterations. Exposed via GetInternalState so a
+	// test (and production diagnostics) can detect a busy-spin: a wedged loop
+	// that wakes immediately every iteration without making progress inflates
+	// this counter far faster than a healthy loop driven by I/O notifications.
+	loopIter atomic.Uint64
 }
 
 type InternalSentPacket struct {
@@ -130,6 +137,7 @@ type InternalState struct {
 	SmoothedRTT          time.Duration
 	RTTVariance          time.Duration
 	SentPackets          []InternalSentPacket
+	LoopIterations       uint64
 }
 
 func (s *Streams) GetInternalState() *InternalState {
@@ -152,6 +160,7 @@ func (s *Streams) GetInternalState() *InternalState {
 		SmoothedRTT:          smoothedRTT,
 		RTTVariance:          rttVariance,
 		SentPackets:          sentRanges,
+		LoopIterations:       s.loopIter.Load(),
 	}
 }
 
@@ -313,20 +322,44 @@ func (s *Streams) handlePacket(recvData *objproto.Message) {
 	}
 }
 
+// nextWakeDeadline computes the wall-clock time the run loop should wake to do
+// timer-driven work (loss detection / pacing), independent of the I/O
+// notification channels it also selects on. A zero time means "no timer; block
+// until a notification arrives".
+func (s *Streams) nextWakeDeadline() time.Time {
+	deadline := s.sh.LossDetectionTimeout()
+	// Pacing governs only data sends, so fold the pacing timer into the wake
+	// deadline ONLY when a send could actually happen on wake: congestion
+	// control permits it (CanSend) AND there is stream data queued (sendTrigger
+	// non-empty). Otherwise honoring it busy-spins the loop: pacer.Timer keys
+	// off budgetAtLastSent and only advances on a send, so once the budget is
+	// drained it returns a fixed PAST timestamp. Waking on that past time
+	// without being able to send leaves lastSentTime unchanged, so the next
+	// iteration sees the same past time and wakes immediately again — a 0-delay
+	// spin. On the single-threaded wasm runtime that spin starves the JS event
+	// loop, so inbound ACKs are never delivered and the in-flight packet is
+	// never acked: the upload wedges until an idle timeout (observed as a WebUI
+	// freeze at the final read-ack). When we cannot send, wait on the loss
+	// timer plus the I/O notifications the caller also selects on; an ACK
+	// (cwnd growth) or a new AppendData wakes the loop and re-evaluates.
+	if s.sh.CanSend() && s.sendTrigger.Len() > 0 {
+		pacer := s.sh.PacingTimeout()
+		if !pacer.IsZero() && (deadline.IsZero() || pacer.Before(deadline)) {
+			deadline = pacer
+		}
+	}
+	return deadline
+}
+
 func (s *Streams) run(ctx context.Context) {
 	for {
+		s.loopIter.Add(1)
 		recvedData := s.recv.Pop()
 		if recvedData != nil {
 			s.handlePacket(recvedData)
 			continue
 		}
-		deadline := s.sh.LossDetectionTimeout()
-		pacer := s.sh.PacingTimeout()
-		if !pacer.IsZero() && !deadline.IsZero() {
-			if pacer.Before(deadline) {
-				deadline = pacer
-			}
-		}
+		deadline := s.nextWakeDeadline()
 		if deadline.IsZero() {
 			select {
 			case <-ctx.Done():
