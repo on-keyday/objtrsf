@@ -440,9 +440,20 @@ func (s *Streams) run(ctx context.Context) {
 			if updateWindowStream != nil && !updateWindowStream.EOF() {
 				s.updateWindow.Push(updateWindowStream) // re-push
 			}
-			if stream != nil {
-				s.sendTrigger.Push(stream) // re-push
-			}
+			// Do NOT re-push the congestion-blocked data stream onto sendTrigger
+			// here. Push() fires the trigger notification, which the run loop's
+			// own select observes immediately — so the loop wakes, finds
+			// CanSend() still false, re-pushes, wakes again: a 0-delay busy-spin
+			// (~150k iters/s, measured). On a multi-threaded host it merely burns
+			// a core until an ACK opens the window; on the single-threaded wasm
+			// runtime the spin starves the JS event loop, so inbound ACKs/pongs
+			// are never delivered — cwnd never opens and the upload wedges the
+			// whole WebUI until the connection dies by idle timeout. The stream
+			// is revived without a self-notify: onACK (send_stream.go) re-pushes
+			// it when an ACK frees the window, detectLost re-pushes on loss, and
+			// PTO (isPTO above) bypasses this block — and a congestion-blocked
+			// stream always has bytesInFlight>=cwnd>0, so one of those always
+			// fires.
 			continue
 		}
 		if cancelStream != nil && !cancelStream.EOF() {
