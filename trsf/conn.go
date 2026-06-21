@@ -83,6 +83,13 @@ type Streams struct {
 	sendStreams map[StreamID]*sendStream
 	recvStreams map[StreamID]*recvStream
 
+	// congestionBlocked holds send streams that were popped from sendTrigger
+	// while the connection was congestion-blocked (CanSend()==false). They are
+	// parked here instead of re-pushed (re-pushing self-notifies and busy-spins)
+	// and drained back into sendTrigger by the run loop once cwnd reopens. Run
+	// loop-confined: only run() touches it, so it needs no lock.
+	congestionBlocked map[StreamID]*sendStream
+
 	bidiIDIssuer *IDIssuer
 	uniIDIssuer  *IDIssuer
 
@@ -354,6 +361,20 @@ func (s *Streams) nextWakeDeadline() time.Time {
 func (s *Streams) run(ctx context.Context) {
 	for {
 		s.loopIter.Add(1)
+		// Revive congestion-blocked streams now that cwnd has reopened. These
+		// were parked (not re-pushed) while CanSend()==false to avoid the
+		// 0-delay self-notify busy-spin; the event that grows cwnd is an inbound
+		// ACK (handlePacket below), so re-pushing here — only when CanSend() is
+		// true — wakes the loop into a real send, not another blocked spin. This
+		// is required because a stream blocked before its first transmission has
+		// no in-flight packet of its own, so the per-stream onACK/onLost revival
+		// can never fire for it; without this drain it would orphan forever.
+		if len(s.congestionBlocked) > 0 && s.sh.CanSend() {
+			for id, blocked := range s.congestionBlocked {
+				delete(s.congestionBlocked, id)
+				s.sendTrigger.Push(blocked)
+			}
+		}
 		recvedData := s.recv.Pop()
 		if recvedData != nil {
 			s.handlePacket(recvedData)
@@ -440,20 +461,28 @@ func (s *Streams) run(ctx context.Context) {
 			if updateWindowStream != nil && !updateWindowStream.EOF() {
 				s.updateWindow.Push(updateWindowStream) // re-push
 			}
-			// Do NOT re-push the congestion-blocked data stream onto sendTrigger
-			// here. Push() fires the trigger notification, which the run loop's
-			// own select observes immediately — so the loop wakes, finds
-			// CanSend() still false, re-pushes, wakes again: a 0-delay busy-spin
-			// (~150k iters/s, measured). On a multi-threaded host it merely burns
-			// a core until an ACK opens the window; on the single-threaded wasm
-			// runtime the spin starves the JS event loop, so inbound ACKs/pongs
-			// are never delivered — cwnd never opens and the upload wedges the
-			// whole WebUI until the connection dies by idle timeout. The stream
-			// is revived without a self-notify: onACK (send_stream.go) re-pushes
-			// it when an ACK frees the window, detectLost re-pushes on loss, and
-			// PTO (isPTO above) bypasses this block — and a congestion-blocked
-			// stream always has bytesInFlight>=cwnd>0, so one of those always
-			// fires.
+			// Park (do NOT re-push) the congestion-blocked data stream. Re-pushing
+			// onto sendTrigger fires the trigger notification, which the run loop's
+			// own select observes immediately — so the loop wakes, finds CanSend()
+			// still false, re-pushes, wakes again: a 0-delay busy-spin (~150k
+			// iters/s, measured). On a multi-threaded host it merely burns a core
+			// until an ACK opens the window; on the single-threaded wasm runtime
+			// the spin starves the JS event loop, so inbound ACKs/pongs are never
+			// delivered — cwnd never opens and the upload wedges the whole WebUI
+			// until the connection dies by idle timeout.
+			//
+			// Instead, hold the stream in congestionBlocked and let the drain at
+			// the top of the loop re-push it once an inbound ACK has grown cwnd
+			// (CanSend() true) — a real external event, so no self-notify spin.
+			// The earlier version dropped the stream entirely, trusting the
+			// per-stream onACK/detectLost/PTO to revive it. That holds only for a
+			// stream with an in-flight packet of its own; a stream popped here
+			// before it ever transmitted (e.g. a later stream in a multi-stream
+			// batch that earlier streams already filled cwnd against) has none, so
+			// none of those callbacks ever fire for it and it orphans forever.
+			if stream != nil {
+				s.congestionBlocked[stream.id] = stream
+			}
 			continue
 		}
 		if cancelStream != nil && !cancelStream.EOF() {
@@ -666,6 +695,7 @@ func NewStreams(ctx context.Context, isServer bool, initialMTU int, maxMTU int, 
 		ctx:                ctx,
 		sendStreams:        make(map[StreamID]*sendStream),
 		recvStreams:        make(map[StreamID]*recvStream),
+		congestionBlocked:  make(map[StreamID]*sendStream),
 		sendTrigger:        newWithTriggerQueue[sendStream](),
 		updateWindow:       newWithTriggerQueue[recvStream](),
 		cancelTrigger:      newWithTriggerQueue[recvStream](),
