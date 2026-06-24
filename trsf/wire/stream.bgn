@@ -79,6 +79,11 @@ format CloseBody:
 
 # Transport-only payload kinds (the shared trsf core's whole vocabulary). They
 # occupy the reserved transport range 0x00-0x3F; application kinds live in a
+# Start of the application-defined kind range. Transport-owned kinds live in
+# 0x00..0x3F; consumers define their own kinds at >= USER_DEFINED_START and the
+# core passes any such non-transport kind out via AutoReceive's receive seam.
+USER_DEFINED_START ::= 0x40
+
 # repo-local enum at >= 0x40 (harness: appwire.AppKind) so the shared core never
 # needs to know them — AutoReceive handles these and routes everything else out.
 enum ApplicationPayloadKind:
