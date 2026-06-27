@@ -285,11 +285,34 @@ type CommandExecutionStream struct {
 	trsf.BidirectionalStream
 	stdoutPipe *io.PipeReader
 	stderrPipe *io.PipeReader
+	// winSize holds the most recent TerminalWindowSize seen on the stream,
+	// packed as (rows<<16)|columns; 0 means none seen yet. Set from the demux
+	// goroutine, read via LastWindowSize. A view-attach snapshot needs the
+	// session's PTY size to render the absolute-positioned output at the right
+	// grid dimensions; the server replays the controlling client's last size as
+	// a control frame ahead of the ring (see server.SessionMux.AttachViewer).
+	winSize atomic.Uint32
+}
+
+// LastWindowSize returns the most recent terminal window size observed on the
+// stream (e.g. replayed by the server to a view-attach). ok is false when no
+// size frame has been seen yet.
+func (w *CommandExecutionStream) LastWindowSize() (rows, cols uint16, ok bool) {
+	v := w.winSize.Load()
+	if v == 0 {
+		return 0, 0, false
+	}
+	return uint16(v >> 16), uint16(v), true
 }
 
 func NewCommandExecutionStream(stream trsf.BidirectionalStream) *CommandExecutionStream {
 	stdoutPipeR, stdoutPipeW := io.Pipe()
 	stderrPipeR, stderrPipeW := io.Pipe()
+	w := &CommandExecutionStream{
+		BidirectionalStream: stream,
+		stdoutPipe:          stdoutPipeR,
+		stderrPipe:          stderrPipeR,
+	}
 	go func() {
 		defer stdoutPipeW.Close()
 		defer stderrPipeW.Close()
@@ -327,16 +350,21 @@ func NewCommandExecutionStream(stream trsf.BidirectionalStream) *CommandExecutio
 					stderrPipeW.CloseWithError(err)
 					return
 				}
+			case frame.FrameType_Control:
+				// A view-attach replay carries the session's PTY size as a
+				// TerminalWindowSize control frame ahead of the ring so the
+				// snapshot renderer can size its grid correctly.
+				if ctrl := hdr.Control(); ctrl != nil && ctrl.Type == frame.ControlType_TerminalWindowSize {
+					if ws := ctrl.TerminalWindowSize(); ws != nil {
+						w.winSize.Store(uint32(ws.Rows)<<16 | uint32(ws.Columns))
+					}
+				}
 			default:
 				// ignore unknown frame types
 			}
 		}
 	}()
-	return &CommandExecutionStream{
-		BidirectionalStream: stream,
-		stdoutPipe:          stdoutPipeR,
-		stderrPipe:          stderrPipeR,
-	}
+	return w
 }
 
 func (w *CommandExecutionStream) Stdout() io.Reader {
@@ -575,17 +603,17 @@ func (w *CommandExecutionStream) RemoteShell() error {
 // [start, end) byte range covering the trigger, or (-1, -1) if none is
 // present. Two encodings are recognised:
 //
-//   1. The raw byte 0x1d (GS = Ctrl+]), which is the default delivery in
-//      every line-editing-disabled terminal mode (POSIX termios raw,
-//      Windows console with ENABLE_VIRTUAL_TERMINAL_INPUT but no Win32
-//      Input Mode).
+//  1. The raw byte 0x1d (GS = Ctrl+]), which is the default delivery in
+//     every line-editing-disabled terminal mode (POSIX termios raw,
+//     Windows console with ENABLE_VIRTUAL_TERMINAL_INPUT but no Win32
+//     Input Mode).
 //
-//   2. A Win32 Input Mode keydown sequence whose Uc field is 29 (0x1d).
-//      Format: `ESC [ <Vk> ; <Sc> ; <Uc> ; <Kd> ; <Cs> ; <Rc> _`. Win32
-//      Input Mode is enabled when a runner-side Windows ConPTY emits the
-//      `ESC [ ? 9001 h` request and the local terminal honours it (e.g.
-//      Windows Terminal). Without case 2, Ctrl+] would be silently
-//      forwarded as the multi-byte CSI to the runner, defeating detach.
+//  2. A Win32 Input Mode keydown sequence whose Uc field is 29 (0x1d).
+//     Format: `ESC [ <Vk> ; <Sc> ; <Uc> ; <Kd> ; <Cs> ; <Rc> _`. Win32
+//     Input Mode is enabled when a runner-side Windows ConPTY emits the
+//     `ESC [ ? 9001 h` request and the local terminal honours it (e.g.
+//     Windows Terminal). Without case 2, Ctrl+] would be silently
+//     forwarded as the multi-byte CSI to the runner, defeating detach.
 //
 // The earliest matching trigger wins. The (start, end) range is consumed
 // (i.e., not forwarded to the runner); the prefix [0, start) is forwarded

@@ -43,23 +43,25 @@ func newEOFBidiStream() *eofBidiStream {
 func (s *eofBidiStream) SignalEOF() { _ = s.w.Close() }
 
 // SendStream methods.
-func (s *eofBidiStream) ID() trsf.StreamID                                                     { return 0 }
-func (s *eofBidiStream) Write(p []byte) (int, error)                                           { return len(p), nil }
-func (s *eofBidiStream) Close() error                                                          { return nil }
-func (s *eofBidiStream) WriteContext(_ context.Context, p []byte) (int, error)                 { return len(p), nil }
-func (s *eofBidiStream) HasSendData() bool                                                     { return false }
-func (s *eofBidiStream) Completed() bool                                                       { return false }
-func (s *eofBidiStream) AppendData(_ bool, _ ...[]byte) error                                  { return nil }
-func (s *eofBidiStream) AppendDataContext(_ context.Context, _ bool, _ ...[]byte) error        { return nil }
+func (s *eofBidiStream) ID() trsf.StreamID                                              { return 0 }
+func (s *eofBidiStream) Write(p []byte) (int, error)                                    { return len(p), nil }
+func (s *eofBidiStream) Close() error                                                   { return nil }
+func (s *eofBidiStream) WriteContext(_ context.Context, p []byte) (int, error)          { return len(p), nil }
+func (s *eofBidiStream) HasSendData() bool                                              { return false }
+func (s *eofBidiStream) Completed() bool                                                { return false }
+func (s *eofBidiStream) AppendData(_ bool, _ ...[]byte) error                           { return nil }
+func (s *eofBidiStream) AppendDataContext(_ context.Context, _ bool, _ ...[]byte) error { return nil }
 
 // ReceiveStream methods.
-func (s *eofBidiStream) Read(p []byte) (int, error)                                            { return s.r.Read(p) }
-func (s *eofBidiStream) ReadContext(_ context.Context, p []byte) (int, error)                  { return s.r.Read(p) }
-func (s *eofBidiStream) ReadDirectContext(_ context.Context, _ uint64) ([]byte, bool, error)   { return nil, true, nil }
-func (s *eofBidiStream) ReadDirect(_ uint64) ([]byte, bool, error)                             { return nil, true, nil }
-func (s *eofBidiStream) HasRecvData() bool                                                     { return false }
-func (s *eofBidiStream) EOF() bool                                                             { return true }
-func (s *eofBidiStream) Cancel()                                                               {}
+func (s *eofBidiStream) Read(p []byte) (int, error)                           { return s.r.Read(p) }
+func (s *eofBidiStream) ReadContext(_ context.Context, p []byte) (int, error) { return s.r.Read(p) }
+func (s *eofBidiStream) ReadDirectContext(_ context.Context, _ uint64) ([]byte, bool, error) {
+	return nil, true, nil
+}
+func (s *eofBidiStream) ReadDirect(_ uint64) ([]byte, bool, error) { return nil, true, nil }
+func (s *eofBidiStream) HasRecvData() bool                         { return false }
+func (s *eofBidiStream) EOF() bool                                 { return true }
+func (s *eofBidiStream) Cancel()                                   {}
 
 // BidirectionalStream method.
 func (s *eofBidiStream) CloseBoth() error { return nil }
@@ -126,7 +128,7 @@ func TestDetachIndex_Win32InputModeCtrlBracket(t *testing.T) {
 	// Real Win32 Input Mode keydown for Ctrl+] captured from Windows
 	// Terminal: Vk=221 (VK_OEM_6), Sc=43, Uc=29 (0x1d), Kd=1, Cs=8 (Ctrl), Rc=1.
 	keydown := []byte("\x1b[221;43;29;1;8;1_")
-	keyup := []byte("\x1b[221;43;29;0;8;1_") // Kd=0; must NOT trigger
+	keyup := []byte("\x1b[221;43;29;0;8;1_")  // Kd=0; must NOT trigger
 	ctrlOnly := []byte("\x1b[17;29;0;1;8;1_") // Vk=VK_CONTROL, Uc=0; must NOT trigger
 	noise := []byte("\x1b[?9001h")            // mode-set; not Win32 Input Mode
 
