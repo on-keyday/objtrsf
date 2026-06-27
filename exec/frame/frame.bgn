@@ -1,0 +1,42 @@
+
+config.go.package = "frame"
+
+enum FrameType:
+    :u8
+    stdin
+    stdout
+    stderr
+    control
+
+
+format FrameHeader:
+    type :FrameType
+    len :u32
+
+format Frame:
+    header :FrameHeader
+    match header.type:
+        FrameType.control => control :Control(input = input.subrange(header.len))
+        .. => data :[header.len]u8
+
+enum ControlType:
+    :u8
+    terminal_window_size
+    signal
+
+
+format Control:
+    type :ControlType
+    match type:
+        ControlType.terminal_window_size => terminal_window_size :TerminalWindowSize
+        ControlType.signal => signal :Signal
+        .. => error("Unexpected error")
+
+format TerminalWindowSize:
+    columns :u16
+    rows :u16
+    width :u16
+    height :u16
+
+format Signal:
+    signal :i32
