@@ -278,7 +278,14 @@ func (r *sendStream) triggerPacket(maxPayload int) *SentRange {
 	if r.eofSent {
 		return nil
 	}
-	headerSize := StreamPacketHeaderSize(r.id, r.offset, 1500 /*currently fixed*/)
+	// Reserve header space using maxPayload as the data-length upper bound:
+	// the actual chunk is at most (maxPayload - headerSize), so VarintLen of
+	// maxPayload upper-bounds the length-field width — never an under-estimate.
+	// The previous fixed 1500 under-reserved once the MTU (hence a chunk)
+	// crossed a varint boundary (e.g. a chunk >16383 needs a 4-byte length
+	// where 1500 assumed 2), pushing the packet past maxPayload — latent until
+	// MTU is raised above ~1500 for stream transports.
+	headerSize := StreamPacketHeaderSize(r.id, r.offset, maxPayload)
 	if maxPayload <= headerSize {
 		return nil
 	}
