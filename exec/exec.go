@@ -28,9 +28,21 @@ import (
 type outStreamWrapper struct {
 	frameType frame.FrameType
 	s         trsf.BidirectionalStream
+	audit     Auditor // optional; taps stdout/stderr before framing
 }
 
 func (o *outStreamWrapper) Write(p []byte) (n int, err error) {
+	if o.audit != nil {
+		// Tap the raw payload before it is chunked/framed below. The loop only
+		// reslices p (never mutates the bytes), so this view is valid here; the
+		// Auditor must copy if it retains beyond the call.
+		switch o.frameType {
+		case frame.FrameType_Stdout:
+			o.audit.Stdout(p)
+		case frame.FrameType_Stderr:
+			o.audit.Stderr(p)
+		}
+	}
 	originLen := len(p)
 	for len(p) > 0 {
 		chunkSize := len(p)
@@ -79,6 +91,22 @@ func resizePty(p pty.Pty, rows, cols, width, height uint16) error {
 	return p.Resize(int(cols), int(rows))
 }
 
+// Auditor observes a command-execution session on the runner side for audit /
+// session-recording: the launched command, every stdin byte received from the
+// client, every stdout/stderr byte sent back, and the final exit. It is opt-in
+// (ExecuteOption.Audit); a nil Auditor disables auditing (the historical
+// behaviour). Implementations must not block the exec hot path — record
+// asynchronously if the sink is slow — and must copy any []byte they retain
+// beyond the call (the buffers are reused). Methods may be called concurrently
+// from the stdout, stderr, and stdin goroutines.
+type Auditor interface {
+	Start(command string, args []string, ptyEnabled bool)
+	Stdin(data []byte)
+	Stdout(data []byte)
+	Stderr(data []byte)
+	Exit(err error)
+}
+
 // ExecuteOption groups optional hooks for ExecuteCommand. Pass via
 // ExecuteCommandWithOption. The original ExecuteCommand keeps its
 // historical signature and forwards an empty option.
@@ -92,6 +120,11 @@ type ExecuteOption struct {
 	// Used by the runner to deliver agentboard wake markers without going
 	// through the TUI/WebUI frame protocol.
 	OnStdinWriter func(write func([]byte) (int, error))
+
+	// Audit, if non-nil, receives a full session record (start / stdin /
+	// stdout / stderr / exit) for the executed command — the remote-shell
+	// audit trail. Nil disables auditing.
+	Audit Auditor
 }
 
 // ExecuteCommandWithOption is the option-bearing form of ExecuteCommand.
@@ -106,18 +139,24 @@ func ExecuteCommand(ctx context.Context, stream trsf.BidirectionalStream, logger
 	return executeCommandImpl(ctx, stream, logger, command, args, cwd, ptyEnabled, extraEnv, ExecuteOption{})
 }
 
-func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, logger *slog.Logger, command string, args []string, cwd string, ptyEnabled bool, extraEnv []string, opt ExecuteOption) error {
+func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, logger *slog.Logger, command string, args []string, cwd string, ptyEnabled bool, extraEnv []string, opt ExecuteOption) (retErr error) {
 	defer stream.CloseBoth()
 	logger.Info("Executing command", "command", command, "args", args, "cwd", cwd, "pty", ptyEnabled)
+	if opt.Audit != nil {
+		opt.Audit.Start(command, args, ptyEnabled)
+		defer func() { opt.Audit.Exit(retErr) }()
+	}
 	gr, grCtx := errgroup.WithContext(ctx)
 	gr.SetLimit(-1)
 	stdout := &outStreamWrapper{
 		frameType: frame.FrameType_Stdout,
 		s:         stream,
+		audit:     opt.Audit,
 	}
 	stderr := &outStreamWrapper{
 		frameType: frame.FrameType_Stderr,
 		s:         stream,
+		audit:     opt.Audit,
 	}
 	pipeOut, pipeIn := io.Pipe()
 	var ptyHandle pty.Pty
@@ -140,6 +179,9 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 					continue
 				}
 				data := *hdr.Data()
+				if opt.Audit != nil {
+					opt.Audit.Stdin(data)
+				}
 				_, err = pipeIn.Write(data)
 				if err != nil {
 					return err
