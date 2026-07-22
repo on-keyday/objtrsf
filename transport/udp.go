@@ -1,12 +1,10 @@
 package transport
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
-	"syscall"
 
 	"github.com/on-keyday/objtrsf/objproto"
 )
@@ -40,7 +38,7 @@ func UDPEndpointEx(sess objproto.RawEndpoint, logger *slog.Logger, port uint16, 
 				Port: int(pkt.To.Addr.Port()),
 			})
 			if err != nil {
-				if errors.Is(err, syscall.EMSGSIZE) {
+				if isMessageTooBig(err) {
 					logger.Debug("udp packet size too large, cannot send", slog.String("to", pkt.To.String()), slog.Int("size", len(pkt.Data)))
 					continue // ignore too big error because upper layer implements PLPMTUD
 				}
