@@ -61,6 +61,7 @@ func (q *withTriggerQueue[T]) Pop() *T {
 		return nil
 	}
 	s := q.queue[0]
+	q.queue[0] = nil // release the popped item; the backing array outlives the slice
 	q.queue = q.queue[1:]
 	delete(q.set, s)
 	if len(q.queue) != 0 {

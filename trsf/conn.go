@@ -120,6 +120,21 @@ type Streams struct {
 	// that wakes immediately every iteration without making progress inflates
 	// this counter far faster than a healthy loop driven by I/O notifications.
 	loopIter atomic.Uint64
+
+	// recvStreamGraceNs is the delay (nanoseconds) between a recv stream's
+	// removal trigger (EOF frame received, or a local cancel sent) and its
+	// recvStreams map entry being dropped. While the entry lives, late
+	// duplicate/retransmitted packets for the stream are routed to it and
+	// deduplicated; after removal a stray packet would materialize a fresh
+	// entry via getRecvStream. Default one minute (≫ any RTO).
+	recvStreamGraceNs atomic.Int64
+}
+
+// SetRecvStreamRemovalGrace overrides the grace period between a recv
+// stream's removal trigger and its map entry being dropped. Intended for
+// tests (the production default is one minute).
+func (s *Streams) SetRecvStreamRemovalGrace(d time.Duration) {
+	s.recvStreamGraceNs.Store(int64(d))
 }
 
 type InternalSentPacket struct {
@@ -251,6 +266,19 @@ func (s *Streams) removeRecvStream(streamID StreamID) {
 	delete(s.recvStreams, streamID)
 }
 
+// scheduleRecvStreamRemoval drops the stream's recvStreams entry after the
+// removal grace period. Triggered when the EOF frame is received or a local
+// cancel is sent — the two events after which only late duplicates can still
+// arrive for the stream. Idempotent per stream (removalScheduled).
+func (s *Streams) scheduleRecvStreamRemoval(rs *recvStream) {
+	if !rs.markRemovalScheduled() {
+		return
+	}
+	time.AfterFunc(time.Duration(s.recvStreamGraceNs.Load()), func() {
+		s.removeRecvStream(rs.id)
+	})
+}
+
 func (s *Streams) removeSendStream(streamID StreamID) {
 	s.streamsLock.Lock()
 	defer s.streamsLock.Unlock()
@@ -287,10 +315,16 @@ func (s *Streams) handlePacket(recvData *objproto.Message) {
 		if err != nil {
 			s.logger.Error("failed to process received stream chunk", "stream_id", streamID, "error", err)
 		}
-		if rs.EOF() { // schedule removal
-			time.AfterFunc(1*time.Minute, func() {
-				s.removeRecvStream(streamID)
-			})
+		// Schedule removal when the EOF frame is RECEIVED. Gating on rs.EOF()
+		// alone never fires here: it reports eofReached, which is set by the
+		// application reader consuming the EOF — after which no further packet
+		// arrives on this stream to re-evaluate the gate, so the map entry
+		// leaked one recvStream per completed inbound stream (fleet-wide
+		// ~6.4MB/day under a 5s scrape). The reader is unaffected by removal:
+		// it holds a direct pointer, and the grace period keeps the entry
+		// routable for late retransmits.
+		if data.IsEof() || rs.EOF() {
+			s.scheduleRecvStreamRemoval(rs)
 		}
 	} else if ack := pkt.StreamAck(); ack != nil {
 		ranges, err := ParseTransferACK(ack)
@@ -518,6 +552,9 @@ func (s *Streams) run(ctx context.Context) {
 				Data:         encodedCancel,
 				ACK:          ack,
 			})
+			// A cancelled stream never sees an EOF frame, so the EOF-received
+			// path in handlePacket cannot reclaim its recvStreams entry.
+			s.scheduleRecvStreamRemoval(cancelStream)
 			if stream != nil {
 				s.sendTrigger.Push(stream) // re-push
 			}
@@ -708,6 +745,7 @@ func NewStreams(ctx context.Context, isServer bool, initialMTU int, maxMTU int, 
 		pnIssuer:           pnIssuer,
 		mtu:                mtu.NewMTUTracker(initialMTU, maxMTU, 30*time.Second),
 	}
+	s.recvStreamGraceNs.Store(int64(time.Minute))
 	if isServer {
 		s.bidiIDIssuer = NewIDIssuer(ServerBidirectionalStart)
 		s.uniIDIssuer = NewIDIssuer(ServerUnidirectionalStart)

@@ -23,10 +23,24 @@ type recvStream struct {
 	updateWindow  *withTriggerQueue[recvStream] // shared with conn
 	cancelStream  *withTriggerQueue[recvStream] // shared with conn
 	cancelSent    bool
-	initialWindow uint64
-	recvWindow    uint64
-	ackedWindow   uint64
-	ctx           context.Context
+	// removalScheduled dedups scheduleRecvStreamRemoval: the removal timer is
+	// armed once per stream even if the trigger repeats (duplicate EOF frames,
+	// cancel retransmits).
+	removalScheduled bool
+	initialWindow    uint64
+	recvWindow       uint64
+	ackedWindow      uint64
+	ctx              context.Context
+}
+
+func (rc *recvStream) markRemovalScheduled() bool {
+	rc.m.Lock()
+	defer rc.m.Unlock()
+	if rc.removalScheduled {
+		return false
+	}
+	rc.removalScheduled = true
+	return true
 }
 
 func newReceiveStream(ctx context.Context, logger *slog.Logger, id StreamID, initialWindow uint64, updateWindow *withTriggerQueue[recvStream], cancelStream *withTriggerQueue[recvStream]) *recvStream {

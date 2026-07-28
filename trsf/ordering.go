@@ -14,7 +14,9 @@ type RecvData struct {
 type OrderingQueue struct {
 	queue      []*RecvData
 	nextOffset uint64
-	eofRecved  bool
+	// eofReached is set by the READER consuming the EOF (ReadDirect), not by
+	// the demux receiving the EOF frame — "has the EOF frame arrived" must be
+	// derived from the frame itself (see Streams.handlePacket), not from here.
 	eofReached bool
 	*trigger
 }
@@ -80,9 +82,6 @@ func (oq *OrderingQueue) Push(data *RecvData) error {
 		return fmt.Errorf("cannot add data after EOF at offset %d", data.Offset)
 	}
 	oq.queue = append(oq.queue, data)
-	if data.Eof {
-		oq.eofRecved = true
-	}
 	oq.maybeNotify()
 	return nil
 }
@@ -124,6 +123,7 @@ func (oq *OrderingQueue) ReadDirect(n uint64) ([]byte, bool) {
 		} else {
 			// full read
 			eof = data.Eof
+			oq.queue[0] = nil // release the consumed chunk; the backing array outlives the slice
 			oq.queue = oq.queue[1:]
 		}
 	}
