@@ -77,14 +77,11 @@ type readStep struct {
 	err  error
 }
 
-// scriptedReader replays steps in order and then blocks forever, the way a
-// real terminal blocks waiting for the next keystroke.
-//
-// It never unblocks, deliberately. The input pump outlives pumpTerminalIO
-// whenever the remote side ends first (that is production behaviour — see the
-// bubbletea note in the pump), so waking it during teardown would race the
-// test's own restore of the package-level hooks. A test that needs the pump
-// gone scripts a terminal error as its last step instead.
+// scriptedReader replays steps in order and then blocks forever, the way a real
+// terminal waits for the next keystroke. It never unblocks: the input pump
+// outlives pumpTerminalIO when the remote side ends first, so waking it during
+// teardown would race the test's restore of the package-level hooks. Tests that
+// need the pump gone script a terminal error as the last step.
 type scriptedReader struct {
 	steps []readStep
 	i     int

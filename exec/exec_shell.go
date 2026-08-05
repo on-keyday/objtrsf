@@ -97,47 +97,31 @@ func (w *CommandExecutionStream) RemoteShell() error {
 	return w.pumpTerminalIO(os.Stdin, os.Stdout)
 }
 
-// stdinGoneGrace bounds how long the runner→terminal direction may keep
-// running after the terminal→runner pump has stopped. A var, not a const, so
-// tests can shorten it.
-//
-// Detach deliberately waits for the peer: the pump half-closes the send side
-// and the server answers by closing the stream back (see the detach comment in
-// pumpTerminalIO), and that close is what normally ends the output copy. The
-// round trip is milliseconds, so anything past this grace means no answer is
-// coming.
+// stdinGoneGrace bounds how long the output direction may run on after the
+// input pump has stopped. Detach waits for the server to close the stream back,
+// which takes milliseconds; past this, no answer is coming. A var so tests can
+// shorten it.
 var stdinGoneGrace = 2 * time.Second
 
-// swallowLocalReadEOF reports whether a read error from the local terminal is
-// a platform artefact that ate a keystroke rather than a genuine end of input.
-// Indirected through a var so tests can drive the path on platforms where the
-// artefact does not exist; see the per-platform implementations.
+// swallowLocalReadEOF reports whether a local read error is a platform artefact
+// that ate a keystroke rather than a genuine end of input. A var so tests can
+// drive the path where the artefact does not exist.
 var swallowLocalReadEOF = platformSwallowLocalReadEOF
 
-// maxSwallowedReadEOF bounds how many consecutive swallowed errors the input
-// pump tolerates before treating the input path as gone. Every real keystroke
-// resets the count, so the limit is only reached by a source that reports the
-// artefact without ever blocking — bounding it keeps that from becoming a spin.
+// maxSwallowedReadEOF bounds consecutive swallows, so a source reporting the
+// artefact without ever blocking ends the session instead of spinning.
 var maxSwallowedReadEOF = 64
 
-// ErrLocalInputLost reports that the local input pump stopped while the remote
-// side was still producing output. The session could no longer receive a
-// keystroke — not even the detach key — so it is torn down instead of being
-// left running with a dead input path.
+// ErrLocalInputLost reports that the input pump stopped while the remote side
+// was still live, so the session was torn down rather than left input-dead.
 var ErrLocalInputLost = errors.New("local input path closed")
 
 // pumpTerminalIO splices in→runner and runner→out until either direction ends.
 // RemoteShell passes os.Stdin / os.Stdout; tests pass their own.
 //
-// Both directions must be able to end the session. Until 2026-08-05 only the
-// output direction could: the input pump's exit was unobserved, so when it
-// stopped first the caller stayed blocked on the output copy with nothing
-// reading the terminal — output kept scrolling while every keystroke, the
-// detach key included, went nowhere. With the terminal in raw mode Ctrl+C is
-// not a signal either and RemoteShell's deferred term.Restore never ran, so
-// the only way out was killing the process from another terminal. Observed on
-// Windows, where Ctrl+Z makes the input read fail (see swallowLocalReadEOF),
-// but the shape is not platform-specific: any input-side failure reaches it.
+// Both directions must be able to end it: an input pump that dies alone leaves
+// the caller blocked on the output copy with nothing reading the terminal, and
+// raw mode means neither Ctrl+C nor the detach key can get out of that.
 func (w *CommandExecutionStream) pumpTerminalIO(in io.Reader, out io.Writer) error {
 	stdin := w.Stdin()
 	stdout := w.Stdout()
@@ -176,9 +160,8 @@ func (w *CommandExecutionStream) pumpTerminalIO(in io.Reader, out io.Writer) err
 	// https://github.com/microsoft/terminal/blob/main/doc/specs/%234999%20-%20Improved%20keyboard%20handling%20in%20Conpty.md
 	const detachByte = 0x1d
 
-	// stdinExit carries why the input pump stopped: nil for an intentional
-	// detach, non-nil for a failure. Buffered so the pump can always report
-	// and exit, even once nobody is receiving.
+	// stdinExit carries why the input pump stopped: nil for a detach, non-nil
+	// for a failure. Buffered so the pump can always report and exit.
 	stdinExit := make(chan error, 1)
 	go func() {
 		buf := make([]byte, 4096)
@@ -211,11 +194,8 @@ func (w *CommandExecutionStream) pumpTerminalIO(in io.Reader, out io.Writer) err
 				}
 			}
 			if err != nil {
-				// A Windows console reports Ctrl+Z as io.EOF even in raw
-				// mode, eating the keystroke; treat that as "nothing to
-				// forward" rather than as the end of the input path. The
-				// counter bounds a pathological source that reports EOF
-				// without ever blocking, which would otherwise spin here.
+				// A Windows console reports Ctrl+Z as io.EOF; drop the
+				// keystroke instead of ending the input path.
 				if swallowLocalReadEOF(in, err) && swallowed < maxSwallowedReadEOF {
 					swallowed++
 					continue
@@ -241,12 +221,10 @@ func (w *CommandExecutionStream) pumpTerminalIO(in io.Reader, out io.Writer) err
 			return err
 		case <-time.After(stdinGoneGrace):
 		}
-		// Unblock the output copy and join it before returning: it writes to
-		// the caller's terminal, and bubbletea reclaims that terminal the
-		// moment tea.Exec sees RemoteShell return. Closing the read end is
-		// what CommandExecutionStream.Close does too; it does not touch the
-		// wire, so a detach that already half-closed the send side keeps the
-		// runner-side session alive and re-attachable.
+		// Unblock the output copy and join it: it writes to the caller's
+		// terminal, which bubbletea reclaims as soon as tea.Exec sees us
+		// return. Closing the read end does not touch the wire, so a detached
+		// session stays alive and re-attachable.
 		_ = w.stdoutPipe.Close()
 		<-copyExit
 		if reason != nil {
