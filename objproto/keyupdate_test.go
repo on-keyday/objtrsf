@@ -224,3 +224,45 @@ func TestPreviousPhasePacketDecryptsInsideRetention(t *testing.T) {
 		t.Fatal("previous-phase packet must be dropped after the retention window")
 	}
 }
+
+func TestPacketCountTriggerAdvancesThePhase(t *testing.T) {
+	// The count trigger also respects the anti-double-advance floors, which in
+	// production are far below the threshold (1024 packets and 1s, against
+	// 2^22 packets that take minutes to send). A test has to lower all three.
+	origPackets, origFloor, origTime := keyUpdatePackets, minPacketsBetweenUpdates, minTimeBetweenUpdates
+	keyUpdatePackets, minPacketsBetweenUpdates, minTimeBetweenUpdates = 8, 4, 0
+	t.Cleanup(func() {
+		keyUpdatePackets, minPacketsBetweenUpdates, minTimeBetweenUpdates = origPackets, origFloor, origTime
+	})
+
+	p := newConnectedPair(t)
+	const total = 24
+	for i := 0; i < total; i++ {
+		if _, _, err := p.client.endpoint.sendApplication(p.client.cid, []byte("x"), p.client, nil); err != nil {
+			t.Fatal(err)
+		}
+		p.pump()
+	}
+	// Every packet must arrive. Asserting only on sendPhase would let a packet
+	// sealed under the wrong phase be silently dropped by the receiver.
+	for i := 0; i < total; i++ {
+		if _, err := p.server.ReceiveMessageTimeout(t.Context(), time.Second); err != nil {
+			t.Fatalf("packet %d of %d was lost across a key update: %v", i+1, total, err)
+		}
+	}
+	p.client.mu.Lock()
+	defer p.client.mu.Unlock()
+	if p.client.sendPhase < 2 {
+		t.Fatalf("send phase advanced only %d times past the packet threshold", p.client.sendPhase)
+	}
+}
+
+func TestUpdateKeyRespectsTheFloor(t *testing.T) {
+	p := newConnectedPair(t)
+	if err := p.client.UpdateKey(); err != nil {
+		t.Fatalf("first update rejected: %v", err)
+	}
+	if err := p.client.UpdateKey(); err == nil {
+		t.Fatal("a second update inside the floor must be refused")
+	}
+}

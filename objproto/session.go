@@ -109,6 +109,11 @@ type Connection interface {
 	ConnectedAt() time.Time
 	LastTime() time.Time
 	Close() error
+	// UpdateKey advances this connection's send key. The peer follows the key
+	// phase bit on the next packet it receives.
+	UpdateKey() error
+	// KeyPhaseAt reports when the current send phase began.
+	KeyPhaseAt() time.Time
 	IsActive() bool
 	Done() <-chan struct{}
 	// for proxy connections

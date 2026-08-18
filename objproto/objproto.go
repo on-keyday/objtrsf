@@ -1145,6 +1145,19 @@ func (s *endpoint) receive(transport string, from netip.AddrPort, data []byte) e
 	}
 }
 
+// Key-update policy. These are vars, not consts, because the real packet
+// threshold is far too large for a test to reach.
+//
+// keyUpdatePackets is half of QUIC's 2^23 AES-GCM confidentiality limit. The
+// two floors keep the sender from advancing twice inside the peer's reordering
+// window: the receiver holds only prev/current/next and can follow one advance
+// at a time, so a double advance would strand it.
+var (
+	keyUpdatePackets         uint64 = 1 << 22
+	minPacketsBetweenUpdates uint64 = 1024
+	minTimeBetweenUpdates           = 1 * time.Second
+)
+
 // prevKeyRetention is how long the previous phase's receive key stays usable
 // after an advance, for packets that the advance overtook. objproto has no PTO
 // estimate to derive this from; packets later than this are dropped and trsf
@@ -1180,6 +1193,31 @@ func (a *activeConnection) ratchetSendLocked() error {
 	a.sendPhaseFrom = a.sentCounter.Load()
 	a.sendPhaseAt = time.Now()
 	return nil
+}
+
+func (a *activeConnection) canUpdateLocked() bool {
+	if a.sentCounter.Load() < a.sendPhaseFrom+minPacketsBetweenUpdates {
+		return false
+	}
+	return time.Since(a.sendPhaseAt) >= minTimeBetweenUpdates
+}
+
+// UpdateKey advances this connection's send key immediately. The peer follows
+// on the next packet it receives.
+func (a *activeConnection) UpdateKey() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.sendPhase > 0 && !a.canUpdateLocked() {
+		return fmt.Errorf("key update refused: previous update was too recent")
+	}
+	return a.ratchetSendLocked()
+}
+
+// KeyPhaseAt reports when the current send phase began, for AutoKeyUpdate.
+func (a *activeConnection) KeyPhaseAt() time.Time {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.sendPhaseAt
 }
 
 // commitRecvPhaseLocked promotes the precomputed next phase. Only ever called
@@ -1228,6 +1266,20 @@ func (s *endpoint) sendApplication(cid ConnectionID, data []byte, a *activeConne
 	}
 	activeConn.mu.Lock()
 	defer activeConn.mu.Unlock()
+	var count uint64
+	if pn != nil {
+		count = uint64(*pn)
+	} else {
+		count = uint64(activeConn.sentCounter.Add(1)) // from 1
+	}
+	// The trigger must run before the header is built: buildHeader stamps the
+	// phase the packet is sealed under, so ratcheting afterwards would seal
+	// with the new key under a header claiming the old phase.
+	if count-activeConn.sendPhaseFrom >= keyUpdatePackets && activeConn.canUpdateLocked() {
+		if err := activeConn.ratchetSendLocked(); err != nil {
+			return 0, 0, err
+		}
+	}
 	pktLen := 8 + len(data) + activeConn.connectionSecret.Overhead()
 	if pktLen > 0xffff {
 		return 0, 0, fmt.Errorf("data too large to send")
@@ -1237,12 +1289,6 @@ func (s *endpoint) sendApplication(cid ConnectionID, data []byte, a *activeConne
 	}
 	plaintext := data
 	nonce := make([]byte, activeConn.connectionSecret.NonceSize())
-	var count uint64
-	if pn != nil {
-		count = uint64(*pn)
-	} else {
-		count = uint64(activeConn.sentCounter.Add(1)) // from 1
-	}
 	copy(nonce[4:], binary.BigEndian.AppendUint64(nil, count))
 	hdrData := pkt.Header.MustAppend(nil)
 	finalData := make([]byte, pktLen)
