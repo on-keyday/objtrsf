@@ -98,43 +98,72 @@ func DeriveKey(secret []byte, context string, keyLen int) (key []byte, err error
 	return key, err
 }
 
-func NewAEADFromCommonKeyKind(kind packet.CommonKeyKind, key []byte) (cipher.AEAD, error) {
+func aeadKeyLen(kind packet.CommonKeyKind) (int, error) {
 	switch kind {
 	case packet.CommonKeyKind_Aes128Gcm:
-		if len(key) < 16 {
-			return nil, fmt.Errorf("invalid key length for AES-128-GCM: %d", len(key))
-		}
-		block, err := aes.NewCipher(key)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create AES-128-GCM cipher: %w", err)
-		}
-		return cipher.NewGCM(block)
+		return 16, nil
 	case packet.CommonKeyKind_Aes192Gcm:
-		if len(key) < 24 {
-			return nil, fmt.Errorf("invalid key length for AES-192-GCM: %d", len(key))
-		}
-		block, err := aes.NewCipher(key)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create AES-192-GCM cipher: %w", err)
-		}
-		return cipher.NewGCM(block)
-	case packet.CommonKeyKind_Aes256Gcm:
-		if len(key) < 32 {
-			return nil, fmt.Errorf("invalid key length for AES-256-GCM: %d", len(key))
-		}
-		block, err := aes.NewCipher(key)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create AES-256-GCM cipher: %w", err)
-		}
-		return cipher.NewGCM(block)
-	case packet.CommonKeyKind_Chacha20Poly1305:
-		if len(key) < 32 {
-			return nil, fmt.Errorf("invalid key length for ChaCha20-Poly1305: %d", len(key))
-		}
-		return chacha20poly1305.New(key)
+		return 24, nil
+	case packet.CommonKeyKind_Aes256Gcm, packet.CommonKeyKind_Chacha20Poly1305:
+		return 32, nil
 	default:
-		return nil, fmt.Errorf("unsupported common key kind: %v", kind)
+		return 0, fmt.Errorf("unsupported common key kind: %v", kind)
 	}
+}
+
+// NewAEADFromCommonKeyKind requires an exactly-sized key. It used to accept any
+// key at least as long as the negotiated kind needed and hand the whole slice
+// to aes.NewCipher, so a negotiated aes128_gcm silently ran AES-256.
+func NewAEADFromCommonKeyKind(kind packet.CommonKeyKind, key []byte) (cipher.AEAD, error) {
+	want, err := aeadKeyLen(kind)
+	if err != nil {
+		return nil, err
+	}
+	if len(key) != want {
+		return nil, fmt.Errorf("invalid key length for %v: got %d, want %d", kind, len(key), want)
+	}
+	if kind == packet.CommonKeyKind_Chacha20Poly1305 {
+		return chacha20poly1305.New(key)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create %v cipher: %w", kind, err)
+	}
+	return cipher.NewGCM(block)
+}
+
+// phaseKeys is one direction's traffic keying material for a single key phase.
+// secret is what ratchets forward; key and iv are derived from it and are
+// discarded wholesale when the phase advances.
+type phaseKeys struct {
+	secret []byte
+	aead   cipher.AEAD
+	iv     []byte
+}
+
+func derivePhaseKeys(secret []byte, kind packet.CommonKeyKind) (phaseKeys, error) {
+	keyLen, err := aeadKeyLen(kind)
+	if err != nil {
+		return phaseKeys{}, err
+	}
+	key, err := DeriveKey(secret, "ksdk-protocol-key", keyLen)
+	if err != nil {
+		return phaseKeys{}, fmt.Errorf("failed to derive phase key: %w", err)
+	}
+	iv, err := DeriveKey(secret, "ksdk-protocol-nonce", 12)
+	if err != nil {
+		return phaseKeys{}, fmt.Errorf("failed to derive phase iv: %w", err)
+	}
+	aead, err := NewAEADFromCommonKeyKind(kind, key)
+	if err != nil {
+		return phaseKeys{}, err
+	}
+	clear(key)
+	return phaseKeys{secret: secret, aead: aead, iv: iv}, nil
+}
+
+func ratchetSecret(secret []byte) ([]byte, error) {
+	return DeriveKey(secret, "ksdk-protocol-ku", 32)
 }
 
 func ECDHFromHandshake(selfPrivate []byte, probe *packet.Handshake) ([]byte, packet.CommonKeyKind, error) {

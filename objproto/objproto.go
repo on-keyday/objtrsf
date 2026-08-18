@@ -256,6 +256,7 @@ type activeConnection struct {
 	cid               ConnectionID
 	connTime          time.Time
 	lastTime          time.Time
+	commonKeyKind     packet.CommonKeyKind
 	connectionSecret  cipher.AEAD // self direction: Seal (send)
 	peerSecret        cipher.AEAD // peer direction: Open (receive)
 	selfIV            []byte
@@ -728,13 +729,14 @@ func (s *endpoint) DeleteProxyBefore(limit time.Time) []ProxyInfo {
 }
 
 type KeyInfo struct {
-	// Direction-separated AEAD keys: the "hs" direction (handshake initiator ->
-	// responder) and the "ack" direction (responder -> initiator) get distinct
-	// keys rather than sharing one master secret separated only by IV.
-	HSMaster         []byte
-	AckMaster        []byte
-	HSIV             []byte
-	AckIV            []byte
+	// Direction-separated traffic secrets, not keys: the "hs" direction
+	// (handshake initiator -> responder) and the "ack" direction (responder ->
+	// initiator) get distinct secrets rather than sharing one separated only by
+	// IV. derivePhaseKeys turns a secret into an AEAD key plus IV for one key
+	// phase; ratchetSecret moves it to the next. The header-protection keys sit
+	// outside the ratchet and never change.
+	HSSecret         []byte
+	AckSecret        []byte
 	HsHeaderProtect  []byte
 	AckHeaderProtect []byte
 }
@@ -752,14 +754,6 @@ func keySchedule(secret []byte, integrityInfo []byte) (keyInfo KeyInfo, err erro
 	if err != nil {
 		return KeyInfo{}, fmt.Errorf("failed to derive ack master secret: %w", err)
 	}
-	hsIv, err := DeriveKey(preMasterSecret, "ksdk-protocol-nonce-hs", 12)
-	if err != nil {
-		return KeyInfo{}, fmt.Errorf("failed to derive nonce IV: %w", err)
-	}
-	ackIv, err := DeriveKey(preMasterSecret, "ksdk-protocol-nonce-ack", 12)
-	if err != nil {
-		return KeyInfo{}, fmt.Errorf("failed to derive ack nonce IV: %w", err)
-	}
 	ackHeaderProtect, err := DeriveKey(preMasterSecret, "ksdk-protocol-header-protect-ack", 32)
 	if err != nil {
 		return KeyInfo{}, fmt.Errorf("failed to derive ack header protect: %w", err)
@@ -769,20 +763,25 @@ func keySchedule(secret []byte, integrityInfo []byte) (keyInfo KeyInfo, err erro
 		return KeyInfo{}, fmt.Errorf("failed to derive hs header protect: %w", err)
 	}
 	return KeyInfo{
-		HSMaster:         hsMaster,
-		AckMaster:        ackMaster,
-		HSIV:             hsIv,
-		AckIV:            ackIv,
+		HSSecret:         hsMaster,
+		AckSecret:        ackMaster,
 		HsHeaderProtect:  hsHeaderProtect,
 		AckHeaderProtect: ackHeaderProtect,
 	}, nil
 }
 
-func (s *endpoint) addActiveConnection(cid ConnectionID, selfAEAD cipher.AEAD, peerAEAD cipher.AEAD,
-	selfIV []byte, peerIV []byte,
+func (s *endpoint) addActiveConnection(cid ConnectionID, selfSecret []byte, peerSecret []byte,
 	commonKeyKind packet.CommonKeyKind,
 	selfHeaderProtect []byte, peerHeaderProtect []byte,
 	transcript []byte, hsDone chan Connection, proxyConn *activeConnection) error {
+	sendKeys, err := derivePhaseKeys(selfSecret, commonKeyKind)
+	if err != nil {
+		return fmt.Errorf("failed to derive send keys: %w", err)
+	}
+	recvKeys, err := derivePhaseKeys(peerSecret, commonKeyKind)
+	if err != nil {
+		return fmt.Errorf("failed to derive receive keys: %w", err)
+	}
 	var (
 		selfHeaderProtectBlock cipher.Block
 		peerHeaderProtectBlock cipher.Block
@@ -816,10 +815,11 @@ func (s *endpoint) addActiveConnection(cid ConnectionID, selfAEAD cipher.AEAD, p
 		active.endpoint = s
 		active.connTime = now
 		active.lastTime = now
-		active.connectionSecret = selfAEAD
-		active.peerSecret = peerAEAD
-		active.selfIV = selfIV
-		active.peerIV = peerIV
+		active.commonKeyKind = commonKeyKind
+		active.connectionSecret = sendKeys.aead
+		active.peerSecret = recvKeys.aead
+		active.selfIV = sendKeys.iv
+		active.peerIV = recvKeys.iv
 		active.selfHeaderProtect = selfHeaderProtectBlock
 		active.peerHeaderProtect = peerHeaderProtectBlock
 		active.transcript = transcript
@@ -832,10 +832,11 @@ func (s *endpoint) addActiveConnection(cid ConnectionID, selfAEAD cipher.AEAD, p
 			cid:               cid,
 			connTime:          now,
 			lastTime:          now,
-			connectionSecret:  selfAEAD,
-			peerSecret:        peerAEAD,
-			selfIV:            selfIV,
-			peerIV:            peerIV,
+			commonKeyKind:     commonKeyKind,
+			connectionSecret:  sendKeys.aead,
+			peerSecret:        recvKeys.aead,
+			selfIV:            sendKeys.iv,
+			peerIV:            recvKeys.iv,
 			selfHeaderProtect: selfHeaderProtectBlock,
 			peerHeaderProtect: peerHeaderProtectBlock,
 			transcript:        transcript,
@@ -873,14 +874,6 @@ func (s *endpoint) receiveHandshake(cid ConnectionID, hs *packet.Handshake, orig
 	if err != nil {
 		return fmt.Errorf("failed to perform key schedule: %w", err)
 	}
-	selfAEAD, err := NewAEADFromCommonKeyKind(commonKeyKind, keys.AckMaster)
-	if err != nil {
-		return fmt.Errorf("failed to create self AEAD: %w", err)
-	}
-	peerAEAD, err := NewAEADFromCommonKeyKind(commonKeyKind, keys.HSMaster)
-	if err != nil {
-		return fmt.Errorf("failed to create peer AEAD: %w", err)
-	}
 	clear(priv)
 	s.endpointLock.Lock()
 	defer s.endpointLock.Unlock()
@@ -900,7 +893,7 @@ func (s *endpoint) receiveHandshake(cid ConnectionID, hs *packet.Handshake, orig
 	if err != nil {
 		return fmt.Errorf("failed to encode packet: %w", err)
 	}
-	err = s.addActiveConnection(cid, selfAEAD, peerAEAD, keys.AckIV, keys.HSIV, commonKeyKind, keys.AckHeaderProtect, keys.HsHeaderProtect, append(originalPacket, ackData...), nil, nil)
+	err = s.addActiveConnection(cid, keys.AckSecret, keys.HSSecret, commonKeyKind, keys.AckHeaderProtect, keys.HsHeaderProtect, append(originalPacket, ackData...), nil, nil)
 	if err != nil {
 		s.logger.Error("failed to add active connection", "cid", cid.String(), "error", err)
 		return fmt.Errorf("failed to add active connection: %w", err)
@@ -940,17 +933,9 @@ func (s *endpoint) receiveHandshakeAck(cid ConnectionID, hs *packet.Handshake, o
 	if err != nil {
 		return fmt.Errorf("failed to perform key schedule: %w", err)
 	}
-	selfAEAD, err := NewAEADFromCommonKeyKind(commonKeyKind, keys.HSMaster)
-	if err != nil {
-		return fmt.Errorf("failed to create self AEAD: %w", err)
-	}
-	peerAEAD, err := NewAEADFromCommonKeyKind(commonKeyKind, keys.AckMaster)
-	if err != nil {
-		return fmt.Errorf("failed to create peer AEAD: %w", err)
-	}
 	clear(sentProbes.PrivateKey) // only clear private key
 	s.deleteHandshake(cid)
-	err = s.addActiveConnection(cid, selfAEAD, peerAEAD, keys.HSIV, keys.AckIV, commonKeyKind, keys.HsHeaderProtect, keys.AckHeaderProtect, append(sentProbes.Transcript, originalData...), sentProbes.hsDone, sentProbes.proxyConnection)
+	err = s.addActiveConnection(cid, keys.HSSecret, keys.AckSecret, commonKeyKind, keys.HsHeaderProtect, keys.AckHeaderProtect, append(sentProbes.Transcript, originalData...), sentProbes.hsDone, sentProbes.proxyConnection)
 	if err != nil {
 		s.logger.Error("failed to add active connection", "cid", cid.String(), "error", err)
 		return fmt.Errorf("failed to add active connection: %w", err)
