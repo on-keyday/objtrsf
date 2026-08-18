@@ -266,9 +266,28 @@ type activeConnection struct {
 	msgs              *messageChannel
 	sentCounter       atomic.Uint64
 	recvTracker       receiveNonceTracker
-	transcript        []byte
-	closed            chan struct{}
-	proxied           bool
+
+	// Key phase state. Each direction ratchets independently: we advance our
+	// own send phase on a trigger and the peer follows the phase bit. The
+	// receive side keeps three phases live -- previous (for packets that were
+	// overtaken by the advance), current, and a precomputed next -- so it can
+	// follow one advance at a time without deriving anything on the hot path.
+	sendSecret     []byte
+	sendPhase      uint64
+	sendPhaseFrom  PacketNumber
+	sendPhaseAt    time.Time
+	recvSecret     []byte
+	recvPhase      uint64
+	recvPhaseFrom  PacketNumber
+	prevPeerSecret cipher.AEAD
+	prevPeerIV     []byte
+	prevExpiry     time.Time
+	nextPeerSecret cipher.AEAD
+	nextPeerIV     []byte
+	nextRecvSecret []byte
+	transcript     []byte
+	closed         chan struct{}
+	proxied        bool
 }
 
 func (a *activeConnection) SetName(name string) {
@@ -782,6 +801,14 @@ func (s *endpoint) addActiveConnection(cid ConnectionID, selfSecret []byte, peer
 	if err != nil {
 		return fmt.Errorf("failed to derive receive keys: %w", err)
 	}
+	nextSecret, err := ratchetSecret(recvKeys.secret)
+	if err != nil {
+		return fmt.Errorf("failed to precompute next receive secret: %w", err)
+	}
+	nextKeys, err := derivePhaseKeys(nextSecret, commonKeyKind)
+	if err != nil {
+		return fmt.Errorf("failed to precompute next receive keys: %w", err)
+	}
 	var (
 		selfHeaderProtectBlock cipher.Block
 		peerHeaderProtectBlock cipher.Block
@@ -820,6 +847,20 @@ func (s *endpoint) addActiveConnection(cid ConnectionID, selfSecret []byte, peer
 		active.peerSecret = recvKeys.aead
 		active.selfIV = sendKeys.iv
 		active.peerIV = recvKeys.iv
+		active.sendSecret = sendKeys.secret
+		active.sendPhase = 0
+		active.sendPhaseFrom = 0
+		active.sendPhaseAt = now
+		active.recvSecret = recvKeys.secret
+		active.recvPhase = 0
+		active.recvPhaseFrom = 0
+		// A reused connection must not inherit a previous phase's key.
+		active.prevPeerSecret = nil
+		active.prevPeerIV = nil
+		active.prevExpiry = time.Time{}
+		active.nextPeerSecret = nextKeys.aead
+		active.nextPeerIV = nextKeys.iv
+		active.nextRecvSecret = nextSecret
 		active.selfHeaderProtect = selfHeaderProtectBlock
 		active.peerHeaderProtect = peerHeaderProtectBlock
 		active.transcript = transcript
@@ -837,6 +878,12 @@ func (s *endpoint) addActiveConnection(cid ConnectionID, selfSecret []byte, peer
 			peerSecret:        recvKeys.aead,
 			selfIV:            sendKeys.iv,
 			peerIV:            recvKeys.iv,
+			sendSecret:        sendKeys.secret,
+			sendPhaseAt:       now,
+			recvSecret:        recvKeys.secret,
+			nextPeerSecret:    nextKeys.aead,
+			nextPeerIV:        nextKeys.iv,
+			nextRecvSecret:    nextSecret,
 			selfHeaderProtect: selfHeaderProtectBlock,
 			peerHeaderProtect: peerHeaderProtectBlock,
 			transcript:        transcript,
@@ -970,11 +1017,38 @@ func (s *endpoint) receiveApplication(cid ConnectionID, data []byte, hdr *packet
 	}
 	copy(nonce[4:], data[:8]) // Use first 8 bytes as nonce counter
 	ciphertext := data[8:]
-	subtle.XORBytes(nonce[:], activeConn.peerIV, nonce)
-	plaintext, err := activeConn.peerSecret.Open(ciphertext[:0], nonce, ciphertext, hdrData)
+
+	// Select the key by the cleartext phase bit. Exactly one Open runs per
+	// packet, which matters because Open decrypts in place: an out-of-phase
+	// packet is a late one from the previous phase if its packet number
+	// predates this phase, and otherwise is the peer advancing into the next.
+	var bit byte
+	if hdr.KeyPhase() {
+		bit = 1
+	}
+	var (
+		plaintext []byte
+		err       error
+		advanced  bool
+	)
+	switch {
+	case bit == byte(activeConn.recvPhase&1):
+		plaintext, err = openPhase(activeConn.peerSecret, activeConn.peerIV, nonce, ciphertext, hdrData)
+	case nonceCounter < activeConn.recvPhaseFrom && activeConn.prevPeerSecret != nil && time.Now().Before(activeConn.prevExpiry):
+		plaintext, err = openPhase(activeConn.prevPeerSecret, activeConn.prevPeerIV, nonce, ciphertext, hdrData)
+	default:
+		plaintext, err = openPhase(activeConn.nextPeerSecret, activeConn.nextPeerIV, nonce, ciphertext, hdrData)
+		advanced = err == nil
+	}
 	if err != nil {
 		s.logger.Warn("failed to decrypt application data", "cid", cid.String(), "error", err)
 		return fmt.Errorf("failed to decrypt data: %w", err)
+	}
+	if advanced {
+		if err := activeConn.commitRecvPhaseLocked(nonceCounter); err != nil {
+			s.logger.Error("failed to commit key phase", "cid", cid.String(), "error", err)
+			return err
+		}
 	}
 	activeConn.recvTracker.InsertNonce(nonceCounter, time.Now(), false)
 	activeConn.lastTime = time.Now()
@@ -1071,6 +1145,71 @@ func (s *endpoint) receive(transport string, from netip.AddrPort, data []byte) e
 	}
 }
 
+// prevKeyRetention is how long the previous phase's receive key stays usable
+// after an advance, for packets that the advance overtook. objproto has no PTO
+// estimate to derive this from; packets later than this are dropped and trsf
+// retransmits them.
+const prevKeyRetention = 3 * time.Second
+
+// openPhase decrypts with one phase's key. nonce carries the raw 8-byte
+// counter in its last 8 bytes; the phase IV is folded in here so each branch
+// uses its own without mutating the shared buffer.
+func openPhase(aead cipher.AEAD, iv, nonce, ciphertext, aad []byte) ([]byte, error) {
+	n := make([]byte, len(nonce))
+	subtle.XORBytes(n, iv, nonce)
+	return aead.Open(ciphertext[:0], n, ciphertext, aad)
+}
+
+// ratchetSendLocked advances this connection's own send phase. The caller must
+// hold a.mu. The packet number space is deliberately untouched: trsf's loss
+// detection reads it and depends on monotonicity.
+func (a *activeConnection) ratchetSendLocked() error {
+	next, err := ratchetSecret(a.sendSecret)
+	if err != nil {
+		return fmt.Errorf("failed to ratchet send secret: %w", err)
+	}
+	keys, err := derivePhaseKeys(next, a.commonKeyKind)
+	if err != nil {
+		return err
+	}
+	clear(a.sendSecret)
+	a.sendSecret = next
+	a.connectionSecret = keys.aead
+	a.selfIV = keys.iv
+	a.sendPhase++
+	a.sendPhaseFrom = a.sentCounter.Load()
+	a.sendPhaseAt = time.Now()
+	return nil
+}
+
+// commitRecvPhaseLocked promotes the precomputed next phase. Only ever called
+// after a successful decryption, so a forged phase bit costs one AEAD open and
+// changes nothing.
+func (a *activeConnection) commitRecvPhaseLocked(pn PacketNumber) error {
+	a.prevPeerSecret = a.peerSecret
+	a.prevPeerIV = a.peerIV
+	a.prevExpiry = time.Now().Add(prevKeyRetention)
+	a.peerSecret = a.nextPeerSecret
+	a.peerIV = a.nextPeerIV
+	clear(a.recvSecret)
+	a.recvSecret = a.nextRecvSecret
+	a.recvPhase++
+	a.recvPhaseFrom = pn
+
+	next, err := ratchetSecret(a.recvSecret)
+	if err != nil {
+		return fmt.Errorf("failed to precompute next receive secret: %w", err)
+	}
+	keys, err := derivePhaseKeys(next, a.commonKeyKind)
+	if err != nil {
+		return err
+	}
+	a.nextRecvSecret = next
+	a.nextPeerSecret = keys.aead
+	a.nextPeerIV = keys.iv
+	return nil
+}
+
 func headerProtectionMask(sample [16]byte, headerProtectKey cipher.Block) [16]byte {
 	var mask [16]byte
 	headerProtectKey.Encrypt(mask[:], sample[:])
@@ -1094,7 +1233,7 @@ func (s *endpoint) sendApplication(cid ConnectionID, data []byte, a *activeConne
 		return 0, 0, fmt.Errorf("data too large to send")
 	}
 	pkt := &packet.Packet{
-		Header: buildHeader(packet.PacketKind_Application, cid.ID, uint16(pktLen), 0),
+		Header: buildHeader(packet.PacketKind_Application, cid.ID, uint16(pktLen), activeConn.sendPhase),
 	}
 	plaintext := data
 	nonce := make([]byte, activeConn.connectionSecret.NonceSize())
