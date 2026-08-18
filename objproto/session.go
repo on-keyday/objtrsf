@@ -67,6 +67,27 @@ func AutoGarbageCollect(s Endpoint, interval time.Duration, handshakeTimeout, co
 	}
 }
 
+// DefaultKeyUpdateInterval is the recommended maxKeyAge for AutoKeyUpdate.
+const DefaultKeyUpdateInterval = 10 * time.Minute
+
+// AutoKeyUpdate rekeys connections whose current send phase has been in use
+// longer than maxKeyAge. The packet-count trigger inside the send path covers
+// busy connections; this covers idle ones, which would otherwise hold a single
+// key for the whole life of the connection.
+func AutoKeyUpdate(s Endpoint, interval, maxKeyAge time.Duration) {
+	ticker := time.NewTicker(interval)
+	for range ticker.C {
+		for _, conn := range s.ListActiveConnections() {
+			if time.Since(conn.KeyPhaseAt()) < maxKeyAge {
+				continue
+			}
+			// A refusal is the anti-double-advance floor talking; the next
+			// tick retries.
+			_ = conn.UpdateKey()
+		}
+	}
+}
+
 func AutoRespondProbes(s Endpoint, macAddr [6]byte, ipAddr netip.AddrPort) {
 	probes := s.GetProbeInfoChannel()
 	for probe := range probes {

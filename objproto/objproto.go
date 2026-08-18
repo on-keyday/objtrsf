@@ -1010,7 +1010,15 @@ func (s *endpoint) receiveApplication(cid ConnectionID, data []byte, hdr *packet
 	copy(sample[:], data[8:8+16])
 	mask := headerProtectionMask(sample, activeConn.peerHeaderProtect)
 	subtle.XORBytes(data[:8], mask[:], data[:8])
-	nonceCounter := binary.BigEndian.Uint64(data[:8])
+	var prot packet.ProtectedHeader
+	protOff := 0
+	if err := prot.DecodeSlice(data[:8], &protOff); err != nil {
+		return fmt.Errorf("failed to decode protected header: %w", err)
+	}
+	// NonceCounter() returns bits 0..62, so the control bit never reaches the
+	// replay tracker. The nonce still folds in all 8 bytes, which is what
+	// authenticates the bit.
+	nonceCounter := prot.NonceCounter()
 	if !activeConn.recvTracker.InsertNonce(nonceCounter, time.Now(), true) {
 		s.logger.Warn("replay attack detected", "cid", cid.String(), "nonceCounter", nonceCounter, "lastCounter", activeConn.recvTracker.largestNonce)
 		return fmt.Errorf("replay attack detected")
@@ -1052,6 +1060,9 @@ func (s *endpoint) receiveApplication(cid ConnectionID, data []byte, hdr *packet
 	}
 	activeConn.recvTracker.InsertNonce(nonceCounter, time.Now(), false)
 	activeConn.lastTime = time.Now()
+	if prot.Control() {
+		return s.handleControl(activeConn, plaintext)
+	}
 	activeConn.msgs.SendMessage(Message{
 		From:         cid,
 		PacketNumber: nonceCounter,
@@ -1206,11 +1217,18 @@ func (a *activeConnection) canUpdateLocked() bool {
 // on the next packet it receives.
 func (a *activeConnection) UpdateKey() error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.sendPhase > 0 && !a.canUpdateLocked() {
+		a.mu.Unlock()
 		return fmt.Errorf("key update refused: previous update was too recent")
 	}
-	return a.ratchetSendLocked()
+	if err := a.ratchetSendLocked(); err != nil {
+		a.mu.Unlock()
+		return err
+	}
+	a.mu.Unlock()
+	// An idle connection has no data packet to carry the new phase bit, so
+	// emit one. sendControl takes a.mu itself, hence the explicit unlock.
+	return a.endpoint.sendControl(a.cid, a, packet.ControlKind_Ping)
 }
 
 // KeyPhaseAt reports when the current send phase began, for AutoKeyUpdate.
@@ -1255,6 +1273,13 @@ func headerProtectionMask(sample [16]byte, headerProtectKey cipher.Block) [16]by
 }
 
 func (s *endpoint) sendApplication(cid ConnectionID, data []byte, a *activeConnection, pn *PacketNumber) (int, PacketNumber, error) {
+	return s.sendApplicationFrame(cid, data, a, pn, false)
+}
+
+// sendApplicationFrame seals one application packet. control marks the payload
+// as an objproto-internal frame rather than application data; both share the
+// packet number space and the key phase.
+func (s *endpoint) sendApplicationFrame(cid ConnectionID, data []byte, a *activeConnection, pn *PacketNumber, control bool) (int, PacketNumber, error) {
 	s.endpointLock.RLock()
 	defer s.endpointLock.RUnlock()
 	activeConn, exists := s.activeConnections[cid]
@@ -1289,10 +1314,14 @@ func (s *endpoint) sendApplication(cid ConnectionID, data []byte, a *activeConne
 	}
 	plaintext := data
 	nonce := make([]byte, activeConn.connectionSecret.NonceSize())
-	copy(nonce[4:], binary.BigEndian.AppendUint64(nil, count))
+	var prot packet.ProtectedHeader
+	prot.SetControl(control)
+	prot.SetNonceCounter(count)
+	protBytes := prot.MustAppend(nil) // 8 bytes: control:u1 || nonce_counter:u63
+	copy(nonce[4:], protBytes)
 	hdrData := pkt.Header.MustAppend(nil)
 	finalData := make([]byte, pktLen)
-	copy(finalData[:8], nonce[4:])
+	copy(finalData[:8], protBytes)
 	subtle.XORBytes(nonce[:], activeConn.selfIV, nonce)
 	activeConn.connectionSecret.Seal(finalData[8:8], nonce, plaintext, hdrData)
 	sample := [16]byte{}

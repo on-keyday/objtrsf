@@ -266,3 +266,48 @@ func TestUpdateKeyRespectsTheFloor(t *testing.T) {
 		t.Fatal("a second update inside the floor must be refused")
 	}
 }
+
+func TestPingIsNotDeliveredToTheApplication(t *testing.T) {
+	p := newConnectedPair(t)
+	if err := p.client.endpoint.sendControl(p.client.cid, p.client, packet.ControlKind_Ping); err != nil {
+		t.Fatal(err)
+	}
+	p.pump()
+	if _, _, err := p.client.endpoint.sendApplication(p.client.cid, []byte("real"), p.client, nil); err != nil {
+		t.Fatal(err)
+	}
+	p.pump()
+	msg, err := p.server.ReceiveMessageTimeout(t.Context(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(msg.Data) != "real" {
+		t.Fatalf("control frame leaked to the application: %q", msg.Data)
+	}
+}
+
+func TestUpdateKeyEmitsAPingThatMovesThePeer(t *testing.T) {
+	p := newConnectedPair(t)
+	if err := p.client.UpdateKey(); err != nil {
+		t.Fatal(err)
+	}
+	p.pump()
+	p.server.mu.Lock()
+	defer p.server.mu.Unlock()
+	if p.server.recvPhase != 1 {
+		t.Fatalf("idle peer did not follow the update: phase %d", p.server.recvPhase)
+	}
+}
+
+func TestControlBitDoesNotCorruptTheReplayTracker(t *testing.T) {
+	p := newConnectedPair(t)
+	if err := p.client.endpoint.sendControl(p.client.cid, p.client, packet.ControlKind_Ping); err != nil {
+		t.Fatal(err)
+	}
+	p.pump()
+	p.server.mu.Lock()
+	defer p.server.mu.Unlock()
+	if p.server.recvTracker.largestNonce > 1<<32 {
+		t.Fatalf("control bit leaked into the replay counter: %d", p.server.recvTracker.largestNonce)
+	}
+}
