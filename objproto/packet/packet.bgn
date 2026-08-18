@@ -44,6 +44,10 @@ enum PacketKind:
     application = 0x33
     probe = 0x67 # for broadcast
 
+enum ControlKind:
+    :u8
+    ping = 0x4b # empty body; carries a key phase on an otherwise idle connection
+
 format Handshake:
     key_kind :KeyKind
     common_key_kind :CommonKeyKind
@@ -54,13 +58,14 @@ format Handshake:
 
 
 format PacketHeader:
-    version :u8
-    kind :PacketKind
-    connection_id :u16
-    len :u16 
+    key_phase :u1
+    mask_seed :u7
+    masked_kind :u8              # PacketKind ^ MASK[byte0][0]
+    masked_connection_id :u16    # connection_id ^ MASK[byte0][1..2]
+    len :u16
 
 format ProtectedHeader:
-    raw_payload :u1
+    control :u1          # 0 = application data, 1 = objproto-internal control frame
     nonce_counter :u63
 
 format EncryptedData:

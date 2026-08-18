@@ -584,18 +584,13 @@ func unmapAddrPort(addr netip.AddrPort) netip.AddrPort {
 }
 
 func (s *endpoint) sendHandshake(cid ConnectionID, priv []byte, hs *Handshake, conn *activeConnection) (*ChanWithTimeout[Connection], error) {
-	pkt := &packet.Packet{
-		Header: packet.PacketHeader{
-			Version:      0,
-			ConnectionId: cid.ID,
-			Kind:         packet.PacketKind_Handshake,
-		},
-	}
 	data, err := hs.Append(nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode handshake: %w", err)
 	}
-	pkt.Header.Len = uint16(len(data))
+	pkt := &packet.Packet{
+		Header: buildHeader(packet.PacketKind_Handshake, cid.ID, uint16(len(data)), 0),
+	}
 	if !pkt.SetData(data) {
 		return nil, fmt.Errorf("dictionary too large")
 	}
@@ -893,19 +888,14 @@ func (s *endpoint) receiveHandshake(cid ConnectionID, hs *packet.Handshake, orig
 		s.logger.Warn("connection already exists for handshake", "cid", cid.String())
 		return fmt.Errorf("connection already exists for %v", cid)
 	}
-	ackPkt := &packet.Packet{
-		Header: packet.PacketHeader{
-			Version:      0,
-			ConnectionId: cid.ID,
-			Kind:         packet.PacketKind_HandshakeAck,
-		},
-	}
 	data, err := response.Append(nil)
 	if err != nil {
 		return fmt.Errorf("failed to encode handshake ack: %w", err)
 	}
-	ackPkt.Header.Len = uint16(len(data))
-	ackPkt.Data = data
+	ackPkt := &packet.Packet{
+		Header: buildHeader(packet.PacketKind_HandshakeAck, cid.ID, uint16(len(data)), 0),
+		Data:   data,
+	}
 	ackData, err := ackPkt.Append(nil)
 	if err != nil {
 		return fmt.Errorf("failed to encode packet: %w", err)
@@ -1048,7 +1038,11 @@ func (s *endpoint) receive(transport string, from netip.AddrPort, data []byte) e
 	if err := pkt.DecodeExact(data); err != nil {
 		return fmt.Errorf("failed to decode packet: %w", err)
 	}
-	cid := NewConnectionID(transport, from, pkt.Header.ConnectionId)
+	// kind and connection_id are XOR-masked on the wire. Recover them into
+	// locals -- the decoded struct and the raw buffer both stay in wire form
+	// so handshake transcripts stay byte-identical on both ends.
+	kind := headerKind(&pkt.Header)
+	cid := NewConnectionID(transport, from, headerConnID(&pkt.Header))
 	s.proxyLock.Lock()
 	proxyTo, exists := s.proxySettings[cid]
 	if exists {
@@ -1061,17 +1055,17 @@ func (s *endpoint) receive(transport string, from netip.AddrPort, data []byte) e
 			s.logger.Error("failed to get proxy peer", "cid", cid.String())
 			return fmt.Errorf("failed to get proxy peer for %v", cid)
 		}
-		s.sendPacket(peer, pkt.Header.Kind, data)
-		s.logger.Debug("proxied packet", "from", cid.String(), "to", peer.String(), "kind", pkt.Header.Kind)
+		s.sendPacket(peer, kind, data)
+		s.logger.Debug("proxied packet", "from", cid.String(), "to", peer.String(), "kind", kind)
 		return nil
 	}
-	switch pkt.Header.Kind {
+	switch kind {
 	case packet.PacketKind_Handshake, packet.PacketKind_HandshakeAck:
-		if s.mode == EndpointModeClient && pkt.Header.Kind == packet.PacketKind_Handshake {
+		if s.mode == EndpointModeClient && kind == packet.PacketKind_Handshake {
 			s.logger.Warn("client connection received handshake packet, ignoring", "cid", cid.String())
 			return nil
 		}
-		if s.mode == EndpointModeServer && pkt.Header.Kind == packet.PacketKind_HandshakeAck {
+		if s.mode == EndpointModeServer && kind == packet.PacketKind_HandshakeAck {
 			s.logger.Warn("server connection received handshake ack packet, ignoring", "cid", cid.String())
 			return nil
 		}
@@ -1079,7 +1073,7 @@ func (s *endpoint) receive(transport string, from netip.AddrPort, data []byte) e
 		if err := hs.DecodeExact(pkt.Data); err != nil {
 			return fmt.Errorf("failed to decode handshake: %w", err)
 		}
-		if pkt.Header.Kind == packet.PacketKind_HandshakeAck {
+		if kind == packet.PacketKind_HandshakeAck {
 			return s.receiveHandshakeAck(cid, hs, data)
 		}
 		return s.receiveHandshake(cid, hs, data)
@@ -1088,7 +1082,7 @@ func (s *endpoint) receive(transport string, from netip.AddrPort, data []byte) e
 	case packet.PacketKind_Probe:
 		return s.receiveProbe(cid, pkt.Data)
 	default:
-		return fmt.Errorf("unknown packet kind: %v", pkt.Header.Kind)
+		return fmt.Errorf("unknown packet kind: %v", kind)
 	}
 }
 
@@ -1110,18 +1104,13 @@ func (s *endpoint) sendApplication(cid ConnectionID, data []byte, a *activeConne
 	}
 	activeConn.mu.Lock()
 	defer activeConn.mu.Unlock()
-	pkt := &packet.Packet{
-		Header: packet.PacketHeader{
-			Version:      0,
-			Kind:         packet.PacketKind_Application,
-			ConnectionId: cid.ID,
-		},
-	}
 	pktLen := 8 + len(data) + activeConn.connectionSecret.Overhead()
 	if pktLen > 0xffff {
 		return 0, 0, fmt.Errorf("data too large to send")
 	}
-	pkt.Header.Len = uint16(pktLen)
+	pkt := &packet.Packet{
+		Header: buildHeader(packet.PacketKind_Application, cid.ID, uint16(pktLen), 0),
+	}
 	plaintext := data
 	nonce := make([]byte, activeConn.connectionSecret.NonceSize())
 	var count uint64
@@ -1173,14 +1162,9 @@ func (s *endpoint) makeProbe(probeID uint16, mac [6]byte, ipAddr netip.AddrPort)
 		return nil, fmt.Errorf("failed to encode probe: %w", err)
 	}
 	pkt := &packet.Packet{
-		Header: packet.PacketHeader{
-			Version:      0,
-			ConnectionId: probeID,
-			Kind:         packet.PacketKind_Probe,
-		},
+		Header: buildHeader(packet.PacketKind_Probe, probeID, uint16(len(data)), 0),
+		Data:   data,
 	}
-	pkt.Header.Len = uint16(len(data))
-	pkt.Data = data
 	pktData, err := pkt.Append(nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode packet: %w", err)

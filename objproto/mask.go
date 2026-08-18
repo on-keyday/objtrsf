@@ -59,3 +59,32 @@ func newMaskSeed(phase uint64, application bool) byte {
 	}
 	return b
 }
+
+func headerByte0(h *packet.PacketHeader) byte {
+	var b byte
+	if h.KeyPhase() {
+		b = 0x80
+	}
+	return b | h.MaskSeed()
+}
+
+func headerKind(h *packet.PacketHeader) packet.PacketKind {
+	return unmaskKind(h.MaskedKind, headerByte0(h))
+}
+
+func headerConnID(h *packet.PacketHeader) uint16 {
+	return unmaskConnID(h.MaskedConnectionId, headerByte0(h))
+}
+
+// buildHeader produces a header already in wire (masked) form. phase is
+// ignored for non-application kinds, which carry no key phase.
+func buildHeader(kind packet.PacketKind, connID uint16, length uint16, phase uint64) packet.PacketHeader {
+	b0 := newMaskSeed(phase, kind == packet.PacketKind_Application)
+	var h packet.PacketHeader
+	h.SetKeyPhase(b0&0x80 != 0)
+	h.SetMaskSeed(b0 & 0x7f)
+	h.MaskedKind = maskKind(kind, b0)
+	h.MaskedConnectionId = maskConnID(connID, b0)
+	h.Len = length
+	return h
+}

@@ -15,12 +15,12 @@ type IPAddress struct {
 	Address []uint8
 }
 
-func (i *IPAddress) SetAddress(tmp332 []uint8) bool {
-	if len(tmp332) > int(255) {
+func (i *IPAddress) SetAddress(tmp401 []uint8) bool {
+	if len(tmp401) > int(255) {
 		return false
 	}
-	i.Len = uint8(len(tmp332))
-	i.Address = tmp332
+	i.Len = uint8(len(tmp401))
+	i.Address = tmp401
 	return true
 }
 
@@ -63,12 +63,12 @@ func (s *IPAddress) MustEncodeCopy(reserved []byte) []byte {
 	return buf
 }
 func (i *IPAddress) EncodeSlice(tmp126 []byte, tmp126Offset *int) error {
-	tmp174 := []uint8{}
+	tmp180 := []uint8{}
 	if len(tmp126)-*tmp126Offset < int(1) {
 		return errors.New("not enough space to reserve data for field \"IPAddress::Len\"")
 	}
-	tmp174 = tmp126[*tmp126Offset : *tmp126Offset+int(1)]
-	tmp174[0] = i.Len
+	tmp180 = tmp126[*tmp126Offset : *tmp126Offset+int(1)]
+	tmp180[0] = i.Len
 	*tmp126Offset += int(1)
 	if !((i.Len == 4) || (i.Len == 16)) {
 		return errors.New("Assertion failed")
@@ -99,9 +99,9 @@ func (s *IPAddress) MustEncode(reserved []byte) []byte {
 	return buf
 }
 func (i *IPAddress) Append(tmp126 []byte) ([]byte, error) {
-	tmp174 := [1]uint8{}
-	tmp174[0] = i.Len
-	tmp126 = append(tmp126, tmp174[:1]...)
+	tmp180 := [1]uint8{}
+	tmp180[0] = i.Len
+	tmp126 = append(tmp126, tmp180[:1]...)
 	if !((i.Len == 4) || (i.Len == 16)) {
 		return nil, errors.New("Assertion failed")
 	}
@@ -120,12 +120,12 @@ func (s *IPAddress) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (i *IPAddress) Read(tmp128 io.Reader) error {
-	tmp128ByteIO, _ := tmp128.(io.ByteReader)
-	_ = tmp128ByteIO
-	if tmp128ByteIO != nil {
+func (i *IPAddress) Read(tmp129 io.Reader) error {
+	tmp129ByteIO, _ := tmp129.(io.ByteReader)
+	_ = tmp129ByteIO
+	if tmp129ByteIO != nil {
 		var err error
-		i.Len, err = tmp128ByteIO.ReadByte()
+		i.Len, err = tmp129ByteIO.ReadByte()
 		if err != nil {
 			return err
 		}
@@ -133,7 +133,7 @@ func (i *IPAddress) Read(tmp128 io.Reader) error {
 		var err error
 		var n int
 		buf := [1]byte{0}
-		if n, err = io.ReadFull(tmp128, buf[:]); err != nil {
+		if n, err = io.ReadFull(tmp129, buf[:]); err != nil {
 			return err
 		}
 		if n != 1 {
@@ -144,7 +144,7 @@ func (i *IPAddress) Read(tmp128 io.Reader) error {
 	if !((i.Len == 4) || (i.Len == 16)) {
 		return errors.New("Assertion failed")
 	}
-	if seeker, ok := tmp128.(io.Seeker); ok {
+	if seeker, ok := tmp129.(io.Seeker); ok {
 		current, err := seeker.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return err
@@ -161,17 +161,17 @@ func (i *IPAddress) Read(tmp128 io.Reader) error {
 			return fmt.Errorf("Too large length requested: %d < %d", endOffset-current, int64(int(i.Len)))
 		}
 		i.Address = make([]byte, int(i.Len))
-		if _, err := io.ReadFull(tmp128, i.Address[0:0+int(i.Len)]); err != nil {
+		if _, err := io.ReadFull(tmp129, i.Address[0:0+int(i.Len)]); err != nil {
 			return err
 		}
 	} else {
 		// To mitigate DoS attack, use incremental buffer allocation
 		// for more performance, use (assert on DSL or safe-len-limit option) and trust-input-len option
-		io_temp_1146 := bytes.NewBuffer(nil)
-		if _, err := io.CopyN(io_temp_1146, tmp128, int64(int(i.Len))); err != nil {
+		io_temp_1214 := bytes.NewBuffer(nil)
+		if _, err := io.CopyN(io_temp_1214, tmp129, int64(int(i.Len))); err != nil {
 			return err
 		}
-		i.Address = io_temp_1146.Bytes()
+		i.Address = io_temp_1214.Bytes()
 	}
 	return nil
 }
@@ -193,22 +193,22 @@ func (s *IPAddress) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (i *IPAddress) DecodeSlice(tmp128 []byte, tmp128Offset *int) error {
+func (i *IPAddress) DecodeSlice(tmp129 []byte, tmp129Offset *int) error {
 	tmp29 := []uint8{}
-	if len(tmp128)-*tmp128Offset < 1 {
+	if len(tmp129)-*tmp129Offset < 1 {
 		return errors.New("not enough data to read for field \"IPAddress::Len\"")
 	}
-	tmp29 = tmp128[*tmp128Offset : *tmp128Offset+1]
-	*tmp128Offset += int(1)
+	tmp29 = tmp129[*tmp129Offset : *tmp129Offset+1]
+	*tmp129Offset += int(1)
 	i.Len = tmp29[0]
 	if !((i.Len == 4) || (i.Len == 16)) {
 		return errors.New("Assertion failed")
 	}
-	if len(tmp128)-*tmp128Offset < int(i.Len) {
+	if len(tmp129)-*tmp129Offset < int(i.Len) {
 		return errors.New("not enough data to read for field \"IPAddress::Address\"")
 	}
-	i.Address = tmp128[*tmp128Offset : *tmp128Offset+int(i.Len)]
-	*tmp128Offset += int(int(i.Len))
+	i.Address = tmp129[*tmp129Offset : *tmp129Offset+int(i.Len)]
+	*tmp129Offset += int(int(i.Len))
 	return nil
 }
 func (s *IPAddress) Decode(buf []byte) ([]byte, error) {
@@ -234,8 +234,8 @@ type MacAddress struct {
 	Address [6]uint8
 }
 
-func (m *MacAddress) Write(tmp224 io.Writer) error {
-	if _, err := tmp224.Write(m.Address[:6]); err != nil {
+func (m *MacAddress) Write(tmp239 io.Writer) error {
+	if _, err := tmp239.Write(m.Address[:6]); err != nil {
 		return err
 	}
 	return nil
@@ -255,12 +255,12 @@ func (s *MacAddress) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (m *MacAddress) EncodeSlice(tmp224 []byte, tmp224Offset *int) error {
-	if len(tmp224)-*tmp224Offset < int(6) {
+func (m *MacAddress) EncodeSlice(tmp239 []byte, tmp239Offset *int) error {
+	if len(tmp239)-*tmp239Offset < int(6) {
 		return errors.New("not enough space to write for field \"MacAddress::Address\"")
 	}
-	copy(tmp224[*tmp224Offset:*tmp224Offset+int(6)], m.Address[:])
-	*tmp224Offset += int(6)
+	copy(tmp239[*tmp239Offset:*tmp239Offset+int(6)], m.Address[:])
+	*tmp239Offset += int(6)
 	return nil
 }
 func (s *MacAddress) Encode(buf []byte) ([]byte, error) {
@@ -278,9 +278,9 @@ func (s *MacAddress) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (m *MacAddress) Append(tmp224 []byte) ([]byte, error) {
-	tmp224 = append(tmp224, m.Address[:6]...)
-	return tmp224, nil
+func (m *MacAddress) Append(tmp239 []byte) ([]byte, error) {
+	tmp239 = append(tmp239, m.Address[:6]...)
+	return tmp239, nil
 }
 func (s *MacAddress) MustAppend(buf []byte) []byte {
 	var err error
@@ -291,8 +291,8 @@ func (s *MacAddress) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (m *MacAddress) Read(tmp225 io.Reader) error {
-	if _, err := io.ReadFull(tmp225, m.Address[0:0+6]); err != nil {
+func (m *MacAddress) Read(tmp240 io.Reader) error {
+	if _, err := io.ReadFull(tmp240, m.Address[0:0+6]); err != nil {
 		return err
 	}
 	return nil
@@ -315,12 +315,12 @@ func (s *MacAddress) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (m *MacAddress) DecodeSlice(tmp225 []byte, tmp225Offset *int) error {
-	if len(tmp225)-*tmp225Offset < 6 {
+func (m *MacAddress) DecodeSlice(tmp240 []byte, tmp240Offset *int) error {
+	if len(tmp240)-*tmp240Offset < 6 {
 		return errors.New("not enough data to read for field \"MacAddress::Address\"")
 	}
-	copy(m.Address[:], tmp225[*tmp225Offset:*tmp225Offset+6])
-	*tmp225Offset += int(6)
+	copy(m.Address[:], tmp240[*tmp240Offset:*tmp240Offset+6])
+	*tmp240Offset += int(6)
 	return nil
 }
 func (s *MacAddress) Decode(buf []byte) ([]byte, error) {
@@ -349,13 +349,13 @@ type Probe struct {
 }
 
 func (p *Probe) Write(tmp96 io.Writer) error {
-	tmp345 := p.MacAddress.Write(tmp96)
-	if tmp345 != nil {
-		return tmp345
+	tmp363 := p.MacAddress.Write(tmp96)
+	if tmp363 != nil {
+		return tmp363
 	}
-	tmp342 := p.IpAddress.Write(tmp96)
-	if tmp342 != nil {
-		return tmp342
+	tmp360 := p.IpAddress.Write(tmp96)
+	if tmp360 != nil {
+		return tmp360
 	}
 	tmp54 := [2]uint8{}
 	binary.BigEndian.PutUint16(tmp54[:], uint16(p.Port))
@@ -380,13 +380,13 @@ func (s *Probe) MustEncodeCopy(reserved []byte) []byte {
 	return buf
 }
 func (p *Probe) EncodeSlice(tmp96 []byte, tmp96Offset *int) error {
-	tmp345 := p.MacAddress.EncodeSlice(tmp96, tmp96Offset)
-	if tmp345 != nil {
-		return tmp345
+	tmp363 := p.MacAddress.EncodeSlice(tmp96, tmp96Offset)
+	if tmp363 != nil {
+		return tmp363
 	}
-	tmp342 := p.IpAddress.EncodeSlice(tmp96, tmp96Offset)
-	if tmp342 != nil {
-		return tmp342
+	tmp360 := p.IpAddress.EncodeSlice(tmp96, tmp96Offset)
+	if tmp360 != nil {
+		return tmp360
 	}
 	tmp54 := []uint8{}
 	if len(tmp96)-*tmp96Offset < int(2) {
@@ -413,17 +413,17 @@ func (s *Probe) MustEncode(reserved []byte) []byte {
 	return buf
 }
 func (p *Probe) Append(tmp96 []byte) ([]byte, error) {
-	var tmp345 error
-	tmp96, tmp345 = p.MacAddress.Append(tmp96)
+	var tmp363 error
+	tmp96, tmp363 = p.MacAddress.Append(tmp96)
 
-	if tmp345 != nil {
-		return nil, tmp345
+	if tmp363 != nil {
+		return nil, tmp363
 	}
-	var tmp342 error
-	tmp96, tmp342 = p.IpAddress.Append(tmp96)
+	var tmp360 error
+	tmp96, tmp360 = p.IpAddress.Append(tmp96)
 
-	if tmp342 != nil {
-		return nil, tmp342
+	if tmp360 != nil {
+		return nil, tmp360
 	}
 	tmp54 := [2]uint8{}
 	binary.BigEndian.PutUint16(tmp54[:], uint16(p.Port))
@@ -440,13 +440,13 @@ func (s *Probe) MustAppend(buf []byte) []byte {
 }
 
 func (p *Probe) Read(tmp99 io.Reader) error {
-	tmp381 := p.MacAddress.Read(tmp99)
-	if tmp381 != nil {
-		return tmp381
+	tmp407 := p.MacAddress.Read(tmp99)
+	if tmp407 != nil {
+		return tmp407
 	}
-	tmp371 := p.IpAddress.Read(tmp99)
-	if tmp371 != nil {
-		return tmp371
+	tmp393 := p.IpAddress.Read(tmp99)
+	if tmp393 != nil {
+		return tmp393
 	}
 	tmp62 := [2]uint8{}
 	if _, err := io.ReadFull(tmp99, tmp62[0:0+2]); err != nil {
@@ -474,13 +474,13 @@ func (s *Probe) DecodeExactCopy(buf []byte) error {
 	return nil
 }
 func (p *Probe) DecodeSlice(tmp99 []byte, tmp99Offset *int) error {
-	tmp381 := p.MacAddress.DecodeSlice(tmp99, tmp99Offset)
-	if tmp381 != nil {
-		return tmp381
+	tmp407 := p.MacAddress.DecodeSlice(tmp99, tmp99Offset)
+	if tmp407 != nil {
+		return tmp407
 	}
-	tmp371 := p.IpAddress.DecodeSlice(tmp99, tmp99Offset)
-	if tmp371 != nil {
-		return tmp371
+	tmp393 := p.IpAddress.DecodeSlice(tmp99, tmp99Offset)
+	if tmp393 != nil {
+		return tmp393
 	}
 	tmp62 := []uint8{}
 	if len(tmp99)-*tmp99Offset < 2 {
@@ -585,90 +585,105 @@ func (e PacketKind) String() string {
 	}
 }
 
-type tmp338 struct {
+type ControlKind uint8
+
+const (
+	ControlKind_Ping ControlKind = 75
+)
+
+func (e ControlKind) String() string {
+	switch e {
+	case ControlKind_Ping:
+		return "Ping"
+	default:
+		return fmt.Sprintf("ControlKind(%d)", e)
+	}
+}
+
+type tmp352 struct {
 	Offset uint16
 }
 
-func (v *tmp338) isVariant164() {}
+func (v *tmp352) isVariant168() {}
 
-type Variant164 interface {
-	isVariant164()
+type Variant168 interface {
+	isVariant168()
 }
 
 type Handshake struct {
 	KeyKind       KeyKind
 	CommonKeyKind CommonKeyKind
-	tmp218        Variant164
+	tmp234        Variant168
 	Len           uint16
 	KeyShare      []uint8
 }
 
 func (h *Handshake) Offset() *uint16 {
 	if h.KeyKind == KeyKind_Offset {
-		tmp337, ok := h.tmp218.(*tmp338)
+		tmp351, ok := h.tmp234.(*tmp352)
 		if !ok {
 			return nil
 		}
-		_ = tmp337 // to prevent unused warnings
-		return &tmp337.Offset
+		_ = tmp351 // to prevent unused warnings
+		return &tmp351.Offset
 	}
 	return nil
 }
-func (h *Handshake) SetOffset(tmp325 uint16) bool {
+func (h *Handshake) SetOffset(tmp331 uint16) bool {
 	if h.KeyKind == KeyKind_Offset {
-		tmp337, ok := h.tmp218.(*tmp338)
+		tmp351, ok := h.tmp234.(*tmp352)
 		if !ok {
-			tmp337 = &tmp338{}
-			h.tmp218 = tmp337
+			tmp351 = &tmp352{}
+			h.tmp234 = tmp351
 		}
-		_ = tmp337 // to prevent unused warnings
-		tmp337.Offset = tmp325
+		_ = tmp351 // to prevent unused warnings
+		tmp351.Offset = tmp331
 		return true
 	}
 	return false
 }
 
-func (h *Handshake) SetKeyShare(tmp321 []uint8) bool {
-	if len(tmp321) > int(65535) {
+func (h *Handshake) SetKeyShare(tmp383 []uint8) bool {
+	if len(tmp383) > int(65535) {
 		return false
 	}
-	h.Len = uint16(len(tmp321))
-	h.KeyShare = tmp321
+	h.Len = uint16(len(tmp383))
+	h.KeyShare = tmp383
 	return true
 }
 
-func (h *Handshake) Write(tmp24 io.Writer) error {
-	tmp334 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp334[:], uint16(uint16(h.KeyKind)))
-	if _, err := tmp24.Write(tmp334[:2]); err != nil {
+func (h *Handshake) Write(tmp27 io.Writer) error {
+	tmp342 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp342[:], uint16(uint16(h.KeyKind)))
+	if _, err := tmp27.Write(tmp342[:2]); err != nil {
 		return err
 	}
-	tmp326 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp326[:], uint16(uint16(h.CommonKeyKind)))
-	if _, err := tmp24.Write(tmp326[:2]); err != nil {
+	tmp339 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp339[:], uint16(uint16(h.CommonKeyKind)))
+	if _, err := tmp27.Write(tmp339[:2]); err != nil {
 		return err
 	}
 	if h.KeyKind == KeyKind_Offset {
-		tmp337, ok := h.tmp218.(*tmp338)
+		tmp351, ok := h.tmp234.(*tmp352)
 		if !ok {
 			return errors.New("invalid union type for encoding")
 		}
-		_ = tmp337 // to prevent unused warnings
-		tmp373 := [2]uint8{}
-		binary.BigEndian.PutUint16(tmp373[:], uint16(tmp337.Offset))
-		if _, err := tmp24.Write(tmp373[:2]); err != nil {
+		_ = tmp351 // to prevent unused warnings
+		tmp337 := [2]uint8{}
+		binary.BigEndian.PutUint16(tmp337[:], uint16(tmp351.Offset))
+		if _, err := tmp27.Write(tmp337[:2]); err != nil {
 			return err
 		}
 	}
-	tmp319 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp319[:], uint16(h.Len))
-	if _, err := tmp24.Write(tmp319[:2]); err != nil {
+	tmp335 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp335[:], uint16(h.Len))
+	if _, err := tmp27.Write(tmp335[:2]); err != nil {
 		return err
 	}
 	if len(h.KeyShare) != int(int(h.Len)) {
 		return fmt.Errorf("size mismatch when writing field \"Handshake::KeyShare\": expected %d, got %d", int(int(h.Len)), len(h.KeyShare))
 	}
-	if _, err := tmp24.Write(h.KeyShare); err != nil {
+	if _, err := tmp27.Write(h.KeyShare); err != nil {
 		return err
 	}
 	return nil
@@ -688,50 +703,50 @@ func (s *Handshake) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (h *Handshake) EncodeSlice(tmp24 []byte, tmp24Offset *int) error {
-	tmp334 := []uint8{}
-	if len(tmp24)-*tmp24Offset < int(2) {
+func (h *Handshake) EncodeSlice(tmp27 []byte, tmp27Offset *int) error {
+	tmp342 := []uint8{}
+	if len(tmp27)-*tmp27Offset < int(2) {
 		return errors.New("not enough space to reserve data for field \"Handshake::KeyKind\"")
 	}
-	tmp334 = tmp24[*tmp24Offset : *tmp24Offset+int(2)]
-	binary.BigEndian.PutUint16(tmp334[:], uint16(uint16(h.KeyKind)))
-	*tmp24Offset += int(2)
-	tmp326 := []uint8{}
-	if len(tmp24)-*tmp24Offset < int(2) {
+	tmp342 = tmp27[*tmp27Offset : *tmp27Offset+int(2)]
+	binary.BigEndian.PutUint16(tmp342[:], uint16(uint16(h.KeyKind)))
+	*tmp27Offset += int(2)
+	tmp339 := []uint8{}
+	if len(tmp27)-*tmp27Offset < int(2) {
 		return errors.New("not enough space to reserve data for field \"Handshake::CommonKeyKind\"")
 	}
-	tmp326 = tmp24[*tmp24Offset : *tmp24Offset+int(2)]
-	binary.BigEndian.PutUint16(tmp326[:], uint16(uint16(h.CommonKeyKind)))
-	*tmp24Offset += int(2)
+	tmp339 = tmp27[*tmp27Offset : *tmp27Offset+int(2)]
+	binary.BigEndian.PutUint16(tmp339[:], uint16(uint16(h.CommonKeyKind)))
+	*tmp27Offset += int(2)
 	if h.KeyKind == KeyKind_Offset {
-		tmp337, ok := h.tmp218.(*tmp338)
+		tmp351, ok := h.tmp234.(*tmp352)
 		if !ok {
 			return errors.New("invalid union type for encoding")
 		}
-		_ = tmp337 // to prevent unused warnings
-		tmp373 := []uint8{}
-		if len(tmp24)-*tmp24Offset < int(2) {
-			return errors.New("not enough space to reserve data for field \"Handshake::tmp218::Offset\"")
+		_ = tmp351 // to prevent unused warnings
+		tmp337 := []uint8{}
+		if len(tmp27)-*tmp27Offset < int(2) {
+			return errors.New("not enough space to reserve data for field \"Handshake::tmp234::Offset\"")
 		}
-		tmp373 = tmp24[*tmp24Offset : *tmp24Offset+int(2)]
-		binary.BigEndian.PutUint16(tmp373[:], uint16(tmp337.Offset))
-		*tmp24Offset += int(2)
+		tmp337 = tmp27[*tmp27Offset : *tmp27Offset+int(2)]
+		binary.BigEndian.PutUint16(tmp337[:], uint16(tmp351.Offset))
+		*tmp27Offset += int(2)
 	}
-	tmp319 := []uint8{}
-	if len(tmp24)-*tmp24Offset < int(2) {
+	tmp335 := []uint8{}
+	if len(tmp27)-*tmp27Offset < int(2) {
 		return errors.New("not enough space to reserve data for field \"Handshake::Len\"")
 	}
-	tmp319 = tmp24[*tmp24Offset : *tmp24Offset+int(2)]
-	binary.BigEndian.PutUint16(tmp319[:], uint16(h.Len))
-	*tmp24Offset += int(2)
+	tmp335 = tmp27[*tmp27Offset : *tmp27Offset+int(2)]
+	binary.BigEndian.PutUint16(tmp335[:], uint16(h.Len))
+	*tmp27Offset += int(2)
 	if len(h.KeyShare) != int(int(h.Len)) {
 		return fmt.Errorf("size mismatch when writing field \"Handshake::KeyShare\": expected %d, got %d", int(int(h.Len)), len(h.KeyShare))
 	}
-	if len(tmp24)-*tmp24Offset < int(0+int(h.Len)) {
+	if len(tmp27)-*tmp27Offset < int(0+int(h.Len)) {
 		return errors.New("not enough space to write for field \"Handshake::KeyShare\"")
 	}
-	copy(tmp24[*tmp24Offset:*tmp24Offset+int(int(h.Len))], h.KeyShare)
-	*tmp24Offset += int(int(h.Len))
+	copy(tmp27[*tmp27Offset:*tmp27Offset+int(int(h.Len))], h.KeyShare)
+	*tmp27Offset += int(int(h.Len))
 	return nil
 }
 func (s *Handshake) Encode(buf []byte) ([]byte, error) {
@@ -749,31 +764,31 @@ func (s *Handshake) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (h *Handshake) Append(tmp24 []byte) ([]byte, error) {
-	tmp334 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp334[:], uint16(uint16(h.KeyKind)))
-	tmp24 = append(tmp24, tmp334[:2]...)
-	tmp326 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp326[:], uint16(uint16(h.CommonKeyKind)))
-	tmp24 = append(tmp24, tmp326[:2]...)
+func (h *Handshake) Append(tmp27 []byte) ([]byte, error) {
+	tmp342 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp342[:], uint16(uint16(h.KeyKind)))
+	tmp27 = append(tmp27, tmp342[:2]...)
+	tmp339 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp339[:], uint16(uint16(h.CommonKeyKind)))
+	tmp27 = append(tmp27, tmp339[:2]...)
 	if h.KeyKind == KeyKind_Offset {
-		tmp337, ok := h.tmp218.(*tmp338)
+		tmp351, ok := h.tmp234.(*tmp352)
 		if !ok {
 			return nil, errors.New("invalid union type for encoding")
 		}
-		_ = tmp337 // to prevent unused warnings
-		tmp373 := [2]uint8{}
-		binary.BigEndian.PutUint16(tmp373[:], uint16(tmp337.Offset))
-		tmp24 = append(tmp24, tmp373[:2]...)
+		_ = tmp351 // to prevent unused warnings
+		tmp337 := [2]uint8{}
+		binary.BigEndian.PutUint16(tmp337[:], uint16(tmp351.Offset))
+		tmp27 = append(tmp27, tmp337[:2]...)
 	}
-	tmp319 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp319[:], uint16(h.Len))
-	tmp24 = append(tmp24, tmp319[:2]...)
+	tmp335 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp335[:], uint16(h.Len))
+	tmp27 = append(tmp27, tmp335[:2]...)
 	if len(h.KeyShare) != int(int(h.Len)) {
 		return nil, fmt.Errorf("size mismatch when writing field \"Handshake::KeyShare\": expected %d, got %d", int(int(h.Len)), len(h.KeyShare))
 	}
-	tmp24 = append(tmp24, h.KeyShare...)
-	return tmp24, nil
+	tmp27 = append(tmp27, h.KeyShare...)
+	return tmp27, nil
 }
 func (s *Handshake) MustAppend(buf []byte) []byte {
 	var err error
@@ -784,40 +799,40 @@ func (s *Handshake) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (h *Handshake) Read(tmp25 io.Reader) error {
-	tmp230 := uint16(0)
-	tmp384 := [2]uint8{}
-	if _, err := io.ReadFull(tmp25, tmp384[0:0+2]); err != nil {
+func (h *Handshake) Read(tmp28 io.Reader) error {
+	tmp245 := uint16(0)
+	tmp406 := [2]uint8{}
+	if _, err := io.ReadFull(tmp28, tmp406[0:0+2]); err != nil {
 		return err
 	}
-	tmp230 = binary.BigEndian.Uint16(tmp384[:])
-	h.KeyKind = KeyKind(tmp230)
-	tmp361 := uint16(0)
-	tmp376 := [2]uint8{}
-	if _, err := io.ReadFull(tmp25, tmp376[0:0+2]); err != nil {
+	tmp245 = binary.BigEndian.Uint16(tmp406[:])
+	h.KeyKind = KeyKind(tmp245)
+	tmp398 := uint16(0)
+	tmp399 := [2]uint8{}
+	if _, err := io.ReadFull(tmp28, tmp399[0:0+2]); err != nil {
 		return err
 	}
-	tmp361 = binary.BigEndian.Uint16(tmp376[:])
-	h.CommonKeyKind = CommonKeyKind(tmp361)
+	tmp398 = binary.BigEndian.Uint16(tmp399[:])
+	h.CommonKeyKind = CommonKeyKind(tmp398)
 	if h.KeyKind == KeyKind_Offset {
-		tmp337, ok := h.tmp218.(*tmp338)
+		tmp351, ok := h.tmp234.(*tmp352)
 		if !ok {
-			tmp337 = &tmp338{}
-			h.tmp218 = tmp337
+			tmp351 = &tmp352{}
+			h.tmp234 = tmp351
 		}
-		_ = tmp337 // to prevent unused warnings
-		tmp351 := [2]uint8{}
-		if _, err := io.ReadFull(tmp25, tmp351[0:0+2]); err != nil {
+		_ = tmp351 // to prevent unused warnings
+		tmp380 := [2]uint8{}
+		if _, err := io.ReadFull(tmp28, tmp380[0:0+2]); err != nil {
 			return err
 		}
-		tmp337.Offset = binary.BigEndian.Uint16(tmp351[:])
+		tmp351.Offset = binary.BigEndian.Uint16(tmp380[:])
 	}
-	tmp330 := [2]uint8{}
-	if _, err := io.ReadFull(tmp25, tmp330[0:0+2]); err != nil {
+	tmp344 := [2]uint8{}
+	if _, err := io.ReadFull(tmp28, tmp344[0:0+2]); err != nil {
 		return err
 	}
-	h.Len = binary.BigEndian.Uint16(tmp330[:])
-	if seeker, ok := tmp25.(io.Seeker); ok {
+	h.Len = binary.BigEndian.Uint16(tmp344[:])
+	if seeker, ok := tmp28.(io.Seeker); ok {
 		current, err := seeker.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return err
@@ -834,17 +849,17 @@ func (h *Handshake) Read(tmp25 io.Reader) error {
 			return fmt.Errorf("Too large length requested: %d < %d", endOffset-current, int64(int(h.Len)))
 		}
 		h.KeyShare = make([]byte, int(h.Len))
-		if _, err := io.ReadFull(tmp25, h.KeyShare[0:0+int(h.Len)]); err != nil {
+		if _, err := io.ReadFull(tmp28, h.KeyShare[0:0+int(h.Len)]); err != nil {
 			return err
 		}
 	} else {
 		// To mitigate DoS attack, use incremental buffer allocation
 		// for more performance, use (assert on DSL or safe-len-limit option) and trust-input-len option
-		io_temp_903 := bytes.NewBuffer(nil)
-		if _, err := io.CopyN(io_temp_903, tmp25, int64(int(h.Len))); err != nil {
+		io_temp_949 := bytes.NewBuffer(nil)
+		if _, err := io.CopyN(io_temp_949, tmp28, int64(int(h.Len))); err != nil {
 			return err
 		}
-		h.KeyShare = io_temp_903.Bytes()
+		h.KeyShare = io_temp_949.Bytes()
 	}
 	return nil
 }
@@ -866,52 +881,52 @@ func (s *Handshake) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (h *Handshake) DecodeSlice(tmp25 []byte, tmp25Offset *int) error {
-	tmp230 := uint16(0)
-	tmp384 := []uint8{}
-	if len(tmp25)-*tmp25Offset < 2 {
+func (h *Handshake) DecodeSlice(tmp28 []byte, tmp28Offset *int) error {
+	tmp245 := uint16(0)
+	tmp406 := []uint8{}
+	if len(tmp28)-*tmp28Offset < 2 {
 		return errors.New("not enough data to read for field \"Handshake::KeyKind\"")
 	}
-	tmp384 = tmp25[*tmp25Offset : *tmp25Offset+2]
-	*tmp25Offset += int(2)
-	tmp230 = binary.BigEndian.Uint16(tmp384[:])
-	h.KeyKind = KeyKind(tmp230)
-	tmp361 := uint16(0)
-	tmp376 := []uint8{}
-	if len(tmp25)-*tmp25Offset < 2 {
+	tmp406 = tmp28[*tmp28Offset : *tmp28Offset+2]
+	*tmp28Offset += int(2)
+	tmp245 = binary.BigEndian.Uint16(tmp406[:])
+	h.KeyKind = KeyKind(tmp245)
+	tmp398 := uint16(0)
+	tmp399 := []uint8{}
+	if len(tmp28)-*tmp28Offset < 2 {
 		return errors.New("not enough data to read for field \"Handshake::CommonKeyKind\"")
 	}
-	tmp376 = tmp25[*tmp25Offset : *tmp25Offset+2]
-	*tmp25Offset += int(2)
-	tmp361 = binary.BigEndian.Uint16(tmp376[:])
-	h.CommonKeyKind = CommonKeyKind(tmp361)
+	tmp399 = tmp28[*tmp28Offset : *tmp28Offset+2]
+	*tmp28Offset += int(2)
+	tmp398 = binary.BigEndian.Uint16(tmp399[:])
+	h.CommonKeyKind = CommonKeyKind(tmp398)
 	if h.KeyKind == KeyKind_Offset {
-		tmp337, ok := h.tmp218.(*tmp338)
+		tmp351, ok := h.tmp234.(*tmp352)
 		if !ok {
-			tmp337 = &tmp338{}
-			h.tmp218 = tmp337
+			tmp351 = &tmp352{}
+			h.tmp234 = tmp351
 		}
-		_ = tmp337 // to prevent unused warnings
-		tmp351 := []uint8{}
-		if len(tmp25)-*tmp25Offset < 2 {
-			return errors.New("not enough data to read for field \"Handshake::tmp218::Offset\"")
+		_ = tmp351 // to prevent unused warnings
+		tmp380 := []uint8{}
+		if len(tmp28)-*tmp28Offset < 2 {
+			return errors.New("not enough data to read for field \"Handshake::tmp234::Offset\"")
 		}
-		tmp351 = tmp25[*tmp25Offset : *tmp25Offset+2]
-		*tmp25Offset += int(2)
-		tmp337.Offset = binary.BigEndian.Uint16(tmp351[:])
+		tmp380 = tmp28[*tmp28Offset : *tmp28Offset+2]
+		*tmp28Offset += int(2)
+		tmp351.Offset = binary.BigEndian.Uint16(tmp380[:])
 	}
-	tmp330 := []uint8{}
-	if len(tmp25)-*tmp25Offset < 2 {
+	tmp344 := []uint8{}
+	if len(tmp28)-*tmp28Offset < 2 {
 		return errors.New("not enough data to read for field \"Handshake::Len\"")
 	}
-	tmp330 = tmp25[*tmp25Offset : *tmp25Offset+2]
-	*tmp25Offset += int(2)
-	h.Len = binary.BigEndian.Uint16(tmp330[:])
-	if len(tmp25)-*tmp25Offset < int(h.Len) {
+	tmp344 = tmp28[*tmp28Offset : *tmp28Offset+2]
+	*tmp28Offset += int(2)
+	h.Len = binary.BigEndian.Uint16(tmp344[:])
+	if len(tmp28)-*tmp28Offset < int(h.Len) {
 		return errors.New("not enough data to read for field \"Handshake::KeyShare\"")
 	}
-	h.KeyShare = tmp25[*tmp25Offset : *tmp25Offset+int(h.Len)]
-	*tmp25Offset += int(int(h.Len))
+	h.KeyShare = tmp28[*tmp28Offset : *tmp28Offset+int(h.Len)]
+	*tmp28Offset += int(int(h.Len))
 	return nil
 }
 func (s *Handshake) Decode(buf []byte) ([]byte, error) {
@@ -933,32 +948,64 @@ func (s *Handshake) DecodeExact(buf []byte) error {
 	return nil
 }
 
-type PacketHeader struct {
-	Version      uint8
-	Kind         PacketKind
-	ConnectionId uint16
-	Len          uint16
+func (h *PacketHeader) KeyPhase() bool {
+	intVal := h.keyPhase()
+	return intVal != 0
+}
+func (p *PacketHeader) keyPhase() uint8 {
+	return uint8(((p.tmp78 >> uint8(7)) & uint8(1)))
 }
 
-func (p *PacketHeader) Write(tmp26 io.Writer) error {
-	tmp302 := [1]uint8{}
-	tmp302[0] = p.Version
-	if _, err := tmp26.Write(tmp302[:1]); err != nil {
+func (p *PacketHeader) SetKeyPhase(value bool) bool {
+	var intVal uint8
+	if value {
+		intVal = 1
+	} else {
+		intVal = 0
+	}
+	return p.setKeyPhase(intVal)
+}
+func (p *PacketHeader) setKeyPhase(tmp347 uint8) bool {
+	p.tmp78 = (p.tmp78 & (^(uint8(1) << uint8(7)))) | ((uint8(tmp347) & uint8(1)) << uint8(7))
+	return true
+}
+
+func (p *PacketHeader) MaskSeed() uint8 {
+	return uint8(((p.tmp78 >> uint8(0)) & uint8(127)))
+}
+
+func (p *PacketHeader) SetMaskSeed(tmp341 uint8) bool {
+	p.tmp78 = (p.tmp78 & (^(uint8(127) << uint8(0)))) | ((uint8(tmp341) & uint8(127)) << uint8(0))
+	return true
+}
+
+type PacketHeader struct {
+	tmp78              uint8
+	MaskedKind         uint8
+	MaskedConnectionId uint16
+	Len                uint16
+}
+
+func (p *PacketHeader) Write(tmp30 io.Writer) error {
+	tmp356 := [1]uint8{}
+	tmp356[0] = uint8((p.keyPhase() & 1)) << uint8(7)
+	tmp356[0] = tmp356[0] | uint8((p.MaskSeed() & 127))
+	if _, err := tmp30.Write(tmp356[:1]); err != nil {
 		return err
 	}
-	tmp298 := [1]uint8{}
-	tmp298[0] = uint8(p.Kind)
-	if _, err := tmp26.Write(tmp298[:1]); err != nil {
+	tmp318 := [1]uint8{}
+	tmp318[0] = p.MaskedKind
+	if _, err := tmp30.Write(tmp318[:1]); err != nil {
 		return err
 	}
-	tmp295 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp295[:], uint16(p.ConnectionId))
-	if _, err := tmp26.Write(tmp295[:2]); err != nil {
+	tmp315 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp315[:], uint16(p.MaskedConnectionId))
+	if _, err := tmp30.Write(tmp315[:2]); err != nil {
 		return err
 	}
-	tmp293 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp293[:], uint16(p.Len))
-	if _, err := tmp26.Write(tmp293[:2]); err != nil {
+	tmp313 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp313[:], uint16(p.Len))
+	if _, err := tmp30.Write(tmp313[:2]); err != nil {
 		return err
 	}
 	return nil
@@ -978,35 +1025,36 @@ func (s *PacketHeader) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (p *PacketHeader) EncodeSlice(tmp26 []byte, tmp26Offset *int) error {
-	tmp302 := []uint8{}
-	if len(tmp26)-*tmp26Offset < int(1) {
-		return errors.New("not enough space to reserve data for field \"PacketHeader::Version\"")
+func (p *PacketHeader) EncodeSlice(tmp30 []byte, tmp30Offset *int) error {
+	tmp356 := []uint8{}
+	if len(tmp30)-*tmp30Offset < int(1) {
+		return errors.New("not enough space to reserve data for field \"PacketHeader::MaskSeed\"")
 	}
-	tmp302 = tmp26[*tmp26Offset : *tmp26Offset+int(1)]
-	tmp302[0] = p.Version
-	*tmp26Offset += int(1)
-	tmp298 := []uint8{}
-	if len(tmp26)-*tmp26Offset < int(1) {
-		return errors.New("not enough space to reserve data for field \"PacketHeader::Kind\"")
+	tmp356 = tmp30[*tmp30Offset : *tmp30Offset+int(1)]
+	tmp356[0] = uint8((p.keyPhase() & 1)) << uint8(7)
+	tmp356[0] = tmp356[0] | uint8((p.MaskSeed() & 127))
+	*tmp30Offset += int(1)
+	tmp318 := []uint8{}
+	if len(tmp30)-*tmp30Offset < int(1) {
+		return errors.New("not enough space to reserve data for field \"PacketHeader::MaskedKind\"")
 	}
-	tmp298 = tmp26[*tmp26Offset : *tmp26Offset+int(1)]
-	tmp298[0] = uint8(p.Kind)
-	*tmp26Offset += int(1)
-	tmp295 := []uint8{}
-	if len(tmp26)-*tmp26Offset < int(2) {
-		return errors.New("not enough space to reserve data for field \"PacketHeader::ConnectionId\"")
+	tmp318 = tmp30[*tmp30Offset : *tmp30Offset+int(1)]
+	tmp318[0] = p.MaskedKind
+	*tmp30Offset += int(1)
+	tmp315 := []uint8{}
+	if len(tmp30)-*tmp30Offset < int(2) {
+		return errors.New("not enough space to reserve data for field \"PacketHeader::MaskedConnectionId\"")
 	}
-	tmp295 = tmp26[*tmp26Offset : *tmp26Offset+int(2)]
-	binary.BigEndian.PutUint16(tmp295[:], uint16(p.ConnectionId))
-	*tmp26Offset += int(2)
-	tmp293 := []uint8{}
-	if len(tmp26)-*tmp26Offset < int(2) {
+	tmp315 = tmp30[*tmp30Offset : *tmp30Offset+int(2)]
+	binary.BigEndian.PutUint16(tmp315[:], uint16(p.MaskedConnectionId))
+	*tmp30Offset += int(2)
+	tmp313 := []uint8{}
+	if len(tmp30)-*tmp30Offset < int(2) {
 		return errors.New("not enough space to reserve data for field \"PacketHeader::Len\"")
 	}
-	tmp293 = tmp26[*tmp26Offset : *tmp26Offset+int(2)]
-	binary.BigEndian.PutUint16(tmp293[:], uint16(p.Len))
-	*tmp26Offset += int(2)
+	tmp313 = tmp30[*tmp30Offset : *tmp30Offset+int(2)]
+	binary.BigEndian.PutUint16(tmp313[:], uint16(p.Len))
+	*tmp30Offset += int(2)
 	return nil
 }
 func (s *PacketHeader) Encode(buf []byte) ([]byte, error) {
@@ -1024,20 +1072,21 @@ func (s *PacketHeader) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (p *PacketHeader) Append(tmp26 []byte) ([]byte, error) {
-	tmp302 := [1]uint8{}
-	tmp302[0] = p.Version
-	tmp26 = append(tmp26, tmp302[:1]...)
-	tmp298 := [1]uint8{}
-	tmp298[0] = uint8(p.Kind)
-	tmp26 = append(tmp26, tmp298[:1]...)
-	tmp295 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp295[:], uint16(p.ConnectionId))
-	tmp26 = append(tmp26, tmp295[:2]...)
-	tmp293 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp293[:], uint16(p.Len))
-	tmp26 = append(tmp26, tmp293[:2]...)
-	return tmp26, nil
+func (p *PacketHeader) Append(tmp30 []byte) ([]byte, error) {
+	tmp356 := [1]uint8{}
+	tmp356[0] = uint8((p.keyPhase() & 1)) << uint8(7)
+	tmp356[0] = tmp356[0] | uint8((p.MaskSeed() & 127))
+	tmp30 = append(tmp30, tmp356[:1]...)
+	tmp318 := [1]uint8{}
+	tmp318[0] = p.MaskedKind
+	tmp30 = append(tmp30, tmp318[:1]...)
+	tmp315 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp315[:], uint16(p.MaskedConnectionId))
+	tmp30 = append(tmp30, tmp315[:2]...)
+	tmp313 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp313[:], uint16(p.Len))
+	tmp30 = append(tmp30, tmp313[:2]...)
+	return tmp30, nil
 }
 func (s *PacketHeader) MustAppend(buf []byte) []byte {
 	var err error
@@ -1048,29 +1097,32 @@ func (s *PacketHeader) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (p *PacketHeader) Read(tmp27 io.Reader) error {
-	tmp314 := [1]uint8{}
-	if _, err := io.ReadFull(tmp27, tmp314[0:0+1]); err != nil {
+func (p *PacketHeader) Read(tmp21 io.Reader) error {
+	tmp378 := [1]uint8{}
+	if _, err := io.ReadFull(tmp21, tmp378[0:0+1]); err != nil {
 		return err
 	}
-	p.Version = tmp314[0]
-	tmp311 := uint8(0)
-	tmp310 := [1]uint8{}
-	if _, err := io.ReadFull(tmp27, tmp310[0:0+1]); err != nil {
+	tmp221 := uint8(0)
+	tmp221 = uint8(((tmp378[0] & 128) >> uint8(7)))
+	p.setKeyPhase(tmp221)
+	tmp371 := uint8(0)
+	tmp371 = uint8((tmp378[0] & uint8(127)))
+	p.SetMaskSeed(tmp371)
+	tmp326 := [1]uint8{}
+	if _, err := io.ReadFull(tmp21, tmp326[0:0+1]); err != nil {
 		return err
 	}
-	tmp311 = tmp310[0]
-	p.Kind = PacketKind(tmp311)
-	tmp307 := [2]uint8{}
-	if _, err := io.ReadFull(tmp27, tmp307[0:0+2]); err != nil {
+	p.MaskedKind = tmp326[0]
+	tmp323 := [2]uint8{}
+	if _, err := io.ReadFull(tmp21, tmp323[0:0+2]); err != nil {
 		return err
 	}
-	p.ConnectionId = binary.BigEndian.Uint16(tmp307[:])
-	tmp305 := [2]uint8{}
-	if _, err := io.ReadFull(tmp27, tmp305[0:0+2]); err != nil {
+	p.MaskedConnectionId = binary.BigEndian.Uint16(tmp323[:])
+	tmp321 := [2]uint8{}
+	if _, err := io.ReadFull(tmp21, tmp321[0:0+2]); err != nil {
 		return err
 	}
-	p.Len = binary.BigEndian.Uint16(tmp305[:])
+	p.Len = binary.BigEndian.Uint16(tmp321[:])
 	return nil
 }
 func (s *PacketHeader) DecodeCopy(buf []byte) ([]byte, error) {
@@ -1091,37 +1143,40 @@ func (s *PacketHeader) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (p *PacketHeader) DecodeSlice(tmp27 []byte, tmp27Offset *int) error {
-	tmp314 := []uint8{}
-	if len(tmp27)-*tmp27Offset < 1 {
-		return errors.New("not enough data to read for field \"PacketHeader::Version\"")
+func (p *PacketHeader) DecodeSlice(tmp21 []byte, tmp21Offset *int) error {
+	tmp378 := []uint8{}
+	if len(tmp21)-*tmp21Offset < 1 {
+		return errors.New("not enough data to read for field \"tmp153\"")
 	}
-	tmp314 = tmp27[*tmp27Offset : *tmp27Offset+1]
-	*tmp27Offset += int(1)
-	p.Version = tmp314[0]
-	tmp311 := uint8(0)
-	tmp310 := []uint8{}
-	if len(tmp27)-*tmp27Offset < 1 {
-		return errors.New("not enough data to read for field \"PacketHeader::Kind\"")
+	tmp378 = tmp21[*tmp21Offset : *tmp21Offset+1]
+	*tmp21Offset += int(1)
+	tmp221 := uint8(0)
+	tmp221 = uint8(((tmp378[0] & 128) >> uint8(7)))
+	p.setKeyPhase(tmp221)
+	tmp371 := uint8(0)
+	tmp371 = uint8((tmp378[0] & uint8(127)))
+	p.SetMaskSeed(tmp371)
+	tmp326 := []uint8{}
+	if len(tmp21)-*tmp21Offset < 1 {
+		return errors.New("not enough data to read for field \"PacketHeader::MaskedKind\"")
 	}
-	tmp310 = tmp27[*tmp27Offset : *tmp27Offset+1]
-	*tmp27Offset += int(1)
-	tmp311 = tmp310[0]
-	p.Kind = PacketKind(tmp311)
-	tmp307 := []uint8{}
-	if len(tmp27)-*tmp27Offset < 2 {
-		return errors.New("not enough data to read for field \"PacketHeader::ConnectionId\"")
+	tmp326 = tmp21[*tmp21Offset : *tmp21Offset+1]
+	*tmp21Offset += int(1)
+	p.MaskedKind = tmp326[0]
+	tmp323 := []uint8{}
+	if len(tmp21)-*tmp21Offset < 2 {
+		return errors.New("not enough data to read for field \"PacketHeader::MaskedConnectionId\"")
 	}
-	tmp307 = tmp27[*tmp27Offset : *tmp27Offset+2]
-	*tmp27Offset += int(2)
-	p.ConnectionId = binary.BigEndian.Uint16(tmp307[:])
-	tmp305 := []uint8{}
-	if len(tmp27)-*tmp27Offset < 2 {
+	tmp323 = tmp21[*tmp21Offset : *tmp21Offset+2]
+	*tmp21Offset += int(2)
+	p.MaskedConnectionId = binary.BigEndian.Uint16(tmp323[:])
+	tmp321 := []uint8{}
+	if len(tmp21)-*tmp21Offset < 2 {
 		return errors.New("not enough data to read for field \"PacketHeader::Len\"")
 	}
-	tmp305 = tmp27[*tmp27Offset : *tmp27Offset+2]
-	*tmp27Offset += int(2)
-	p.Len = binary.BigEndian.Uint16(tmp305[:])
+	tmp321 = tmp21[*tmp21Offset : *tmp21Offset+2]
+	*tmp21Offset += int(2)
+	p.Len = binary.BigEndian.Uint16(tmp321[:])
 	return nil
 }
 func (s *PacketHeader) Decode(buf []byte) ([]byte, error) {
@@ -1143,25 +1198,25 @@ func (s *PacketHeader) DecodeExact(buf []byte) error {
 	return nil
 }
 
-func (p *ProtectedHeader) RawPayload() bool {
-	intVal := p.rawPayload()
+func (p *ProtectedHeader) Control() bool {
+	intVal := p.control()
 	return intVal != 0
 }
-func (p *ProtectedHeader) rawPayload() uint8 {
+func (p *ProtectedHeader) control() uint8 {
 	return uint8(((p.tmp70 >> uint64(63)) & uint64(1)))
 }
 
-func (p *ProtectedHeader) SetRawPayload(value bool) bool {
+func (p *ProtectedHeader) SetControl(value bool) bool {
 	var intVal uint8
 	if value {
 		intVal = 1
 	} else {
 		intVal = 0
 	}
-	return p.setRawPayload(intVal)
+	return p.setControl(intVal)
 }
-func (p *ProtectedHeader) setRawPayload(tmp335 uint8) bool {
-	p.tmp70 = (p.tmp70 & (^(uint64(1) << uint64(63)))) | ((uint64(tmp335) & uint64(1)) << uint64(63))
+func (p *ProtectedHeader) setControl(tmp309 uint8) bool {
+	p.tmp70 = (p.tmp70 & (^(uint64(1) << uint64(63)))) | ((uint64(tmp309) & uint64(1)) << uint64(63))
 	return true
 }
 
@@ -1169,8 +1224,8 @@ func (p *ProtectedHeader) NonceCounter() uint64 {
 	return uint64(((p.tmp70 >> uint64(0)) & uint64(9223372036854775807)))
 }
 
-func (p *ProtectedHeader) SetNonceCounter(tmp333 uint64) bool {
-	p.tmp70 = (p.tmp70 & (^(uint64(9223372036854775807) << uint64(0)))) | ((uint64(tmp333) & uint64(9223372036854775807)) << uint64(0))
+func (p *ProtectedHeader) SetNonceCounter(tmp307 uint64) bool {
+	p.tmp70 = (p.tmp70 & (^(uint64(9223372036854775807) << uint64(0)))) | ((uint64(tmp307) & uint64(9223372036854775807)) << uint64(0))
 	return true
 }
 
@@ -1179,17 +1234,17 @@ type ProtectedHeader struct {
 }
 
 func (p *ProtectedHeader) Write(tmp107 io.Writer) error {
-	tmp256 := [8]uint8{}
-	tmp256[0] = uint8((p.rawPayload() & 1)) << uint8(7)
-	tmp256[0] = tmp256[0] | uint8(((p.NonceCounter() >> uint64(56)) & uint64(127)))
-	tmp256[1] = uint8(((p.NonceCounter() >> uint64(48)) & uint64(255)))
-	tmp256[2] = uint8(((p.NonceCounter() >> uint64(40)) & uint64(255)))
-	tmp256[3] = uint8(((p.NonceCounter() >> uint64(32)) & uint64(255)))
-	tmp256[4] = uint8(((p.NonceCounter() >> uint64(24)) & uint64(255)))
-	tmp256[5] = uint8(((p.NonceCounter() >> uint64(16)) & uint64(255)))
-	tmp256[6] = uint8(((p.NonceCounter() >> uint64(8)) & uint64(255)))
-	tmp256[7] = uint8((p.NonceCounter() & uint64(255)))
-	if _, err := tmp107.Write(tmp256[:8]); err != nil {
+	tmp272 := [8]uint8{}
+	tmp272[0] = uint8((p.control() & 1)) << uint8(7)
+	tmp272[0] = tmp272[0] | uint8(((p.NonceCounter() >> uint64(56)) & uint64(127)))
+	tmp272[1] = uint8(((p.NonceCounter() >> uint64(48)) & uint64(255)))
+	tmp272[2] = uint8(((p.NonceCounter() >> uint64(40)) & uint64(255)))
+	tmp272[3] = uint8(((p.NonceCounter() >> uint64(32)) & uint64(255)))
+	tmp272[4] = uint8(((p.NonceCounter() >> uint64(24)) & uint64(255)))
+	tmp272[5] = uint8(((p.NonceCounter() >> uint64(16)) & uint64(255)))
+	tmp272[6] = uint8(((p.NonceCounter() >> uint64(8)) & uint64(255)))
+	tmp272[7] = uint8((p.NonceCounter() & uint64(255)))
+	if _, err := tmp107.Write(tmp272[:8]); err != nil {
 		return err
 	}
 	return nil
@@ -1210,20 +1265,20 @@ func (s *ProtectedHeader) MustEncodeCopy(reserved []byte) []byte {
 	return buf
 }
 func (p *ProtectedHeader) EncodeSlice(tmp107 []byte, tmp107Offset *int) error {
-	tmp256 := []uint8{}
+	tmp272 := []uint8{}
 	if len(tmp107)-*tmp107Offset < int(8) {
 		return errors.New("not enough space to reserve data for field \"ProtectedHeader::NonceCounter\"")
 	}
-	tmp256 = tmp107[*tmp107Offset : *tmp107Offset+int(8)]
-	tmp256[0] = uint8((p.rawPayload() & 1)) << uint8(7)
-	tmp256[0] = tmp256[0] | uint8(((p.NonceCounter() >> uint64(56)) & uint64(127)))
-	tmp256[1] = uint8(((p.NonceCounter() >> uint64(48)) & uint64(255)))
-	tmp256[2] = uint8(((p.NonceCounter() >> uint64(40)) & uint64(255)))
-	tmp256[3] = uint8(((p.NonceCounter() >> uint64(32)) & uint64(255)))
-	tmp256[4] = uint8(((p.NonceCounter() >> uint64(24)) & uint64(255)))
-	tmp256[5] = uint8(((p.NonceCounter() >> uint64(16)) & uint64(255)))
-	tmp256[6] = uint8(((p.NonceCounter() >> uint64(8)) & uint64(255)))
-	tmp256[7] = uint8((p.NonceCounter() & uint64(255)))
+	tmp272 = tmp107[*tmp107Offset : *tmp107Offset+int(8)]
+	tmp272[0] = uint8((p.control() & 1)) << uint8(7)
+	tmp272[0] = tmp272[0] | uint8(((p.NonceCounter() >> uint64(56)) & uint64(127)))
+	tmp272[1] = uint8(((p.NonceCounter() >> uint64(48)) & uint64(255)))
+	tmp272[2] = uint8(((p.NonceCounter() >> uint64(40)) & uint64(255)))
+	tmp272[3] = uint8(((p.NonceCounter() >> uint64(32)) & uint64(255)))
+	tmp272[4] = uint8(((p.NonceCounter() >> uint64(24)) & uint64(255)))
+	tmp272[5] = uint8(((p.NonceCounter() >> uint64(16)) & uint64(255)))
+	tmp272[6] = uint8(((p.NonceCounter() >> uint64(8)) & uint64(255)))
+	tmp272[7] = uint8((p.NonceCounter() & uint64(255)))
 	*tmp107Offset += int(8)
 	return nil
 }
@@ -1243,17 +1298,17 @@ func (s *ProtectedHeader) MustEncode(reserved []byte) []byte {
 	return buf
 }
 func (p *ProtectedHeader) Append(tmp107 []byte) ([]byte, error) {
-	tmp256 := [8]uint8{}
-	tmp256[0] = uint8((p.rawPayload() & 1)) << uint8(7)
-	tmp256[0] = tmp256[0] | uint8(((p.NonceCounter() >> uint64(56)) & uint64(127)))
-	tmp256[1] = uint8(((p.NonceCounter() >> uint64(48)) & uint64(255)))
-	tmp256[2] = uint8(((p.NonceCounter() >> uint64(40)) & uint64(255)))
-	tmp256[3] = uint8(((p.NonceCounter() >> uint64(32)) & uint64(255)))
-	tmp256[4] = uint8(((p.NonceCounter() >> uint64(24)) & uint64(255)))
-	tmp256[5] = uint8(((p.NonceCounter() >> uint64(16)) & uint64(255)))
-	tmp256[6] = uint8(((p.NonceCounter() >> uint64(8)) & uint64(255)))
-	tmp256[7] = uint8((p.NonceCounter() & uint64(255)))
-	tmp107 = append(tmp107, tmp256[:8]...)
+	tmp272 := [8]uint8{}
+	tmp272[0] = uint8((p.control() & 1)) << uint8(7)
+	tmp272[0] = tmp272[0] | uint8(((p.NonceCounter() >> uint64(56)) & uint64(127)))
+	tmp272[1] = uint8(((p.NonceCounter() >> uint64(48)) & uint64(255)))
+	tmp272[2] = uint8(((p.NonceCounter() >> uint64(40)) & uint64(255)))
+	tmp272[3] = uint8(((p.NonceCounter() >> uint64(32)) & uint64(255)))
+	tmp272[4] = uint8(((p.NonceCounter() >> uint64(24)) & uint64(255)))
+	tmp272[5] = uint8(((p.NonceCounter() >> uint64(16)) & uint64(255)))
+	tmp272[6] = uint8(((p.NonceCounter() >> uint64(8)) & uint64(255)))
+	tmp272[7] = uint8((p.NonceCounter() & uint64(255)))
+	tmp107 = append(tmp107, tmp272[:8]...)
 	return tmp107, nil
 }
 func (s *ProtectedHeader) MustAppend(buf []byte) []byte {
@@ -1265,17 +1320,17 @@ func (s *ProtectedHeader) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (p *ProtectedHeader) Read(tmp8 io.Reader) error {
-	tmp290 := [8]uint8{}
-	if _, err := io.ReadFull(tmp8, tmp290[0:0+8]); err != nil {
+func (p *ProtectedHeader) Read(tmp10 io.Reader) error {
+	tmp306 := [8]uint8{}
+	if _, err := io.ReadFull(tmp10, tmp306[0:0+8]); err != nil {
 		return err
 	}
-	tmp274 := uint8(0)
-	tmp274 = uint8(((tmp290[0] & 128) >> uint8(7)))
-	p.setRawPayload(tmp274)
-	tmp271 := uint64(0)
-	tmp271 = (((((((uint64((tmp290[0] & uint8(127))) << uint64(56)) | (uint64(tmp290[1]) << uint64(48))) | (uint64(tmp290[2]) << uint64(40))) | (uint64(tmp290[3]) << uint64(32))) | (uint64(tmp290[4]) << uint64(24))) | (uint64(tmp290[5]) << uint64(16))) | (uint64(tmp290[6]) << uint64(8))) | uint64(tmp290[7])
-	p.SetNonceCounter(tmp271)
+	tmp288 := uint8(0)
+	tmp288 = uint8(((tmp306[0] & 128) >> uint8(7)))
+	p.setControl(tmp288)
+	tmp286 := uint64(0)
+	tmp286 = (((((((uint64((tmp306[0] & uint8(127))) << uint64(56)) | (uint64(tmp306[1]) << uint64(48))) | (uint64(tmp306[2]) << uint64(40))) | (uint64(tmp306[3]) << uint64(32))) | (uint64(tmp306[4]) << uint64(24))) | (uint64(tmp306[5]) << uint64(16))) | (uint64(tmp306[6]) << uint64(8))) | uint64(tmp306[7])
+	p.SetNonceCounter(tmp286)
 	return nil
 }
 func (s *ProtectedHeader) DecodeCopy(buf []byte) ([]byte, error) {
@@ -1296,19 +1351,19 @@ func (s *ProtectedHeader) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (p *ProtectedHeader) DecodeSlice(tmp8 []byte, tmp8Offset *int) error {
-	tmp290 := []uint8{}
-	if len(tmp8)-*tmp8Offset < 8 {
-		return errors.New("not enough data to read for field \"tmp15\"")
+func (p *ProtectedHeader) DecodeSlice(tmp10 []byte, tmp10Offset *int) error {
+	tmp306 := []uint8{}
+	if len(tmp10)-*tmp10Offset < 8 {
+		return errors.New("not enough data to read for field \"tmp16\"")
 	}
-	tmp290 = tmp8[*tmp8Offset : *tmp8Offset+8]
-	*tmp8Offset += int(8)
-	tmp274 := uint8(0)
-	tmp274 = uint8(((tmp290[0] & 128) >> uint8(7)))
-	p.setRawPayload(tmp274)
-	tmp271 := uint64(0)
-	tmp271 = (((((((uint64((tmp290[0] & uint8(127))) << uint64(56)) | (uint64(tmp290[1]) << uint64(48))) | (uint64(tmp290[2]) << uint64(40))) | (uint64(tmp290[3]) << uint64(32))) | (uint64(tmp290[4]) << uint64(24))) | (uint64(tmp290[5]) << uint64(16))) | (uint64(tmp290[6]) << uint64(8))) | uint64(tmp290[7])
-	p.SetNonceCounter(tmp271)
+	tmp306 = tmp10[*tmp10Offset : *tmp10Offset+8]
+	*tmp10Offset += int(8)
+	tmp288 := uint8(0)
+	tmp288 = uint8(((tmp306[0] & 128) >> uint8(7)))
+	p.setControl(tmp288)
+	tmp286 := uint64(0)
+	tmp286 = (((((((uint64((tmp306[0] & uint8(127))) << uint64(56)) | (uint64(tmp306[1]) << uint64(48))) | (uint64(tmp306[2]) << uint64(40))) | (uint64(tmp306[3]) << uint64(32))) | (uint64(tmp306[4]) << uint64(24))) | (uint64(tmp306[5]) << uint64(16))) | (uint64(tmp306[6]) << uint64(8))) | uint64(tmp306[7])
+	p.SetNonceCounter(tmp286)
 	return nil
 }
 func (s *ProtectedHeader) Decode(buf []byte) ([]byte, error) {
@@ -1335,13 +1390,13 @@ type EncryptedData struct {
 	Data         []uint8
 }
 
-func (e *EncryptedData) Write(tmp133 io.Writer) error {
-	tmp196 := [8]uint8{}
-	binary.BigEndian.PutUint64(tmp196[:], uint64(e.NonceCounter))
-	if _, err := tmp133.Write(tmp196[:8]); err != nil {
+func (e *EncryptedData) Write(tmp134 io.Writer) error {
+	tmp202 := [8]uint8{}
+	binary.BigEndian.PutUint64(tmp202[:], uint64(e.NonceCounter))
+	if _, err := tmp134.Write(tmp202[:8]); err != nil {
 		return err
 	}
-	if _, err := tmp133.Write(e.Data); err != nil {
+	if _, err := tmp134.Write(e.Data); err != nil {
 		return err
 	}
 	return nil
@@ -1361,19 +1416,19 @@ func (s *EncryptedData) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (e *EncryptedData) EncodeSlice(tmp133 []byte, tmp133Offset *int) error {
-	tmp196 := []uint8{}
-	if len(tmp133)-*tmp133Offset < int(8) {
+func (e *EncryptedData) EncodeSlice(tmp134 []byte, tmp134Offset *int) error {
+	tmp202 := []uint8{}
+	if len(tmp134)-*tmp134Offset < int(8) {
 		return errors.New("not enough space to reserve data for field \"EncryptedData::NonceCounter\"")
 	}
-	tmp196 = tmp133[*tmp133Offset : *tmp133Offset+int(8)]
-	binary.BigEndian.PutUint64(tmp196[:], uint64(e.NonceCounter))
-	*tmp133Offset += int(8)
-	if len(tmp133)-*tmp133Offset < int(0+len(e.Data)) {
+	tmp202 = tmp134[*tmp134Offset : *tmp134Offset+int(8)]
+	binary.BigEndian.PutUint64(tmp202[:], uint64(e.NonceCounter))
+	*tmp134Offset += int(8)
+	if len(tmp134)-*tmp134Offset < int(0+len(e.Data)) {
 		return errors.New("not enough space to write for field \"EncryptedData::Data\"")
 	}
-	copy(tmp133[*tmp133Offset:*tmp133Offset+int(len(e.Data))], e.Data)
-	*tmp133Offset += int(len(e.Data))
+	copy(tmp134[*tmp134Offset:*tmp134Offset+int(len(e.Data))], e.Data)
+	*tmp134Offset += int(len(e.Data))
 	return nil
 }
 func (s *EncryptedData) Encode(buf []byte) ([]byte, error) {
@@ -1391,12 +1446,12 @@ func (s *EncryptedData) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (e *EncryptedData) Append(tmp133 []byte) ([]byte, error) {
-	tmp196 := [8]uint8{}
-	binary.BigEndian.PutUint64(tmp196[:], uint64(e.NonceCounter))
-	tmp133 = append(tmp133, tmp196[:8]...)
-	tmp133 = append(tmp133, e.Data...)
-	return tmp133, nil
+func (e *EncryptedData) Append(tmp134 []byte) ([]byte, error) {
+	tmp202 := [8]uint8{}
+	binary.BigEndian.PutUint64(tmp202[:], uint64(e.NonceCounter))
+	tmp134 = append(tmp134, tmp202[:8]...)
+	tmp134 = append(tmp134, e.Data...)
+	return tmp134, nil
 }
 func (s *EncryptedData) MustAppend(buf []byte) []byte {
 	var err error
@@ -1408,11 +1463,11 @@ func (s *EncryptedData) MustAppend(buf []byte) []byte {
 }
 
 func (e *EncryptedData) Read(tmp105 io.Reader) error {
-	tmp221 := [8]uint8{}
-	if _, err := io.ReadFull(tmp105, tmp221[0:0+8]); err != nil {
+	tmp211 := [8]uint8{}
+	if _, err := io.ReadFull(tmp105, tmp211[0:0+8]); err != nil {
 		return err
 	}
-	e.NonceCounter = binary.BigEndian.Uint64(tmp221[:])
+	e.NonceCounter = binary.BigEndian.Uint64(tmp211[:])
 	{
 		var readErr error
 		e.Data, readErr = io.ReadAll(tmp105)
@@ -1441,13 +1496,13 @@ func (s *EncryptedData) DecodeExactCopy(buf []byte) error {
 	return nil
 }
 func (e *EncryptedData) DecodeSlice(tmp105 []byte, tmp105Offset *int) error {
-	tmp221 := []uint8{}
+	tmp211 := []uint8{}
 	if len(tmp105)-*tmp105Offset < 8 {
 		return errors.New("not enough data to read for field \"EncryptedData::NonceCounter\"")
 	}
-	tmp221 = tmp105[*tmp105Offset : *tmp105Offset+8]
+	tmp211 = tmp105[*tmp105Offset : *tmp105Offset+8]
 	*tmp105Offset += int(8)
-	e.NonceCounter = binary.BigEndian.Uint64(tmp221[:])
+	e.NonceCounter = binary.BigEndian.Uint64(tmp211[:])
 	e.Data = tmp105[*tmp105Offset:]
 	*tmp105Offset += len(e.Data)
 	return nil
@@ -1476,24 +1531,24 @@ type Packet struct {
 	Data   []uint8
 }
 
-func (p *Packet) SetData(tmp233 []uint8) bool {
-	if len(tmp233) > int(65535) {
+func (p *Packet) SetData(tmp249 []uint8) bool {
+	if len(tmp249) > int(65535) {
 		return false
 	}
-	p.Header.Len = uint16(len(tmp233))
-	p.Data = tmp233
+	p.Header.Len = uint16(len(tmp249))
+	p.Data = tmp249
 	return true
 }
 
-func (p *Packet) Write(tmp129 io.Writer) error {
-	tmp238 := p.Header.Write(tmp129)
-	if tmp238 != nil {
-		return tmp238
+func (p *Packet) Write(tmp130 io.Writer) error {
+	tmp254 := p.Header.Write(tmp130)
+	if tmp254 != nil {
+		return tmp254
 	}
 	if len(p.Data) != int(int(p.Header.Len)) {
 		return fmt.Errorf("size mismatch when writing field \"Packet::Data\": expected %d, got %d", int(int(p.Header.Len)), len(p.Data))
 	}
-	if _, err := tmp129.Write(p.Data); err != nil {
+	if _, err := tmp130.Write(p.Data); err != nil {
 		return err
 	}
 	return nil
@@ -1513,19 +1568,19 @@ func (s *Packet) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (p *Packet) EncodeSlice(tmp129 []byte, tmp129Offset *int) error {
-	tmp238 := p.Header.EncodeSlice(tmp129, tmp129Offset)
-	if tmp238 != nil {
-		return tmp238
+func (p *Packet) EncodeSlice(tmp130 []byte, tmp130Offset *int) error {
+	tmp254 := p.Header.EncodeSlice(tmp130, tmp130Offset)
+	if tmp254 != nil {
+		return tmp254
 	}
 	if len(p.Data) != int(int(p.Header.Len)) {
 		return fmt.Errorf("size mismatch when writing field \"Packet::Data\": expected %d, got %d", int(int(p.Header.Len)), len(p.Data))
 	}
-	if len(tmp129)-*tmp129Offset < int(0+int(p.Header.Len)) {
+	if len(tmp130)-*tmp130Offset < int(0+int(p.Header.Len)) {
 		return errors.New("not enough space to write for field \"Packet::Data\"")
 	}
-	copy(tmp129[*tmp129Offset:*tmp129Offset+int(int(p.Header.Len))], p.Data)
-	*tmp129Offset += int(int(p.Header.Len))
+	copy(tmp130[*tmp130Offset:*tmp130Offset+int(int(p.Header.Len))], p.Data)
+	*tmp130Offset += int(int(p.Header.Len))
 	return nil
 }
 func (s *Packet) Encode(buf []byte) ([]byte, error) {
@@ -1543,18 +1598,18 @@ func (s *Packet) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (p *Packet) Append(tmp129 []byte) ([]byte, error) {
-	var tmp238 error
-	tmp129, tmp238 = p.Header.Append(tmp129)
+func (p *Packet) Append(tmp130 []byte) ([]byte, error) {
+	var tmp254 error
+	tmp130, tmp254 = p.Header.Append(tmp130)
 
-	if tmp238 != nil {
-		return nil, tmp238
+	if tmp254 != nil {
+		return nil, tmp254
 	}
 	if len(p.Data) != int(int(p.Header.Len)) {
 		return nil, fmt.Errorf("size mismatch when writing field \"Packet::Data\": expected %d, got %d", int(int(p.Header.Len)), len(p.Data))
 	}
-	tmp129 = append(tmp129, p.Data...)
-	return tmp129, nil
+	tmp130 = append(tmp130, p.Data...)
+	return tmp130, nil
 }
 func (s *Packet) MustAppend(buf []byte) []byte {
 	var err error
@@ -1565,12 +1620,12 @@ func (s *Packet) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (p *Packet) Read(tmp131 io.Reader) error {
-	tmp241 := p.Header.Read(tmp131)
-	if tmp241 != nil {
-		return tmp241
+func (p *Packet) Read(tmp132 io.Reader) error {
+	tmp257 := p.Header.Read(tmp132)
+	if tmp257 != nil {
+		return tmp257
 	}
-	if seeker, ok := tmp131.(io.Seeker); ok {
+	if seeker, ok := tmp132.(io.Seeker); ok {
 		current, err := seeker.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return err
@@ -1587,17 +1642,17 @@ func (p *Packet) Read(tmp131 io.Reader) error {
 			return fmt.Errorf("Too large length requested: %d < %d", endOffset-current, int64(int(p.Header.Len)))
 		}
 		p.Data = make([]byte, int(p.Header.Len))
-		if _, err := io.ReadFull(tmp131, p.Data[0:0+int(p.Header.Len)]); err != nil {
+		if _, err := io.ReadFull(tmp132, p.Data[0:0+int(p.Header.Len)]); err != nil {
 			return err
 		}
 	} else {
 		// To mitigate DoS attack, use incremental buffer allocation
 		// for more performance, use (assert on DSL or safe-len-limit option) and trust-input-len option
-		io_temp_422 := bytes.NewBuffer(nil)
-		if _, err := io.CopyN(io_temp_422, tmp131, int64(int(p.Header.Len))); err != nil {
+		io_temp_448 := bytes.NewBuffer(nil)
+		if _, err := io.CopyN(io_temp_448, tmp132, int64(int(p.Header.Len))); err != nil {
 			return err
 		}
-		p.Data = io_temp_422.Bytes()
+		p.Data = io_temp_448.Bytes()
 	}
 	return nil
 }
@@ -1619,16 +1674,16 @@ func (s *Packet) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (p *Packet) DecodeSlice(tmp131 []byte, tmp131Offset *int) error {
-	tmp241 := p.Header.DecodeSlice(tmp131, tmp131Offset)
-	if tmp241 != nil {
-		return tmp241
+func (p *Packet) DecodeSlice(tmp132 []byte, tmp132Offset *int) error {
+	tmp257 := p.Header.DecodeSlice(tmp132, tmp132Offset)
+	if tmp257 != nil {
+		return tmp257
 	}
-	if len(tmp131)-*tmp131Offset < int(p.Header.Len) {
+	if len(tmp132)-*tmp132Offset < int(p.Header.Len) {
 		return errors.New("not enough data to read for field \"Packet::Data\"")
 	}
-	p.Data = tmp131[*tmp131Offset : *tmp131Offset+int(p.Header.Len)]
-	*tmp131Offset += int(int(p.Header.Len))
+	p.Data = tmp132[*tmp132Offset : *tmp132Offset+int(p.Header.Len)]
+	*tmp132Offset += int(int(p.Header.Len))
 	return nil
 }
 func (s *Packet) Decode(buf []byte) ([]byte, error) {
