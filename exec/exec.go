@@ -303,12 +303,30 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 		if len(extraEnv) > 0 {
 			cmd.Env = append(os.Environ(), extraEnv...)
 		}
-		cmd.Stdin = pipeOut
 		cmd.Stdout = stdout
 		cmd.Stderr = stderr
+		// Own the stdin copy rather than handing os/exec a non-*os.File
+		// Stdin. When it owns the copier, Cmd.Wait waits for that goroutine
+		// too, and the goroutine is parked in Read on a pipe that only closes
+		// when the STREAM ends -- so a child that exits on its own leaves Wait
+		// blocked indefinitely. Measured as a 45-second hang: the child was
+		// gone, its exit status was sitting there, and Wait would not return.
+		//
+		// With the copy here, Wait returns as soon as the process does. This
+		// goroutine outlives it, parked on the same read, until handleInput's
+		// `defer pipeIn.Close()` fires when the stream ends -- which the
+		// deferred stream.CloseBoth guarantees.
+		childIn, err := cmd.StdinPipe()
+		if err != nil {
+			return err
+		}
 		if err := cmd.Start(); err != nil {
 			return err
 		}
+		go func() {
+			defer childIn.Close()
+			_, _ = io.Copy(childIn, pipeOut)
+		}()
 		process = cmd.Process
 		waitFn = cmd.Wait
 	}

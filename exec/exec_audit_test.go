@@ -144,3 +144,35 @@ func TestAuditExitIsNilOnACleanChild(t *testing.T) {
 		t.Errorf("Exit err = %v on a child that exited 0", rec.exitErr)
 	}
 }
+
+// A child that exits on its own must let Wait return. When os/exec owned the
+// stdin copy, that goroutine stayed parked on a pipe only the stream could
+// close, so Wait blocked until the session was torn down from outside --
+// measured as a 45-second hang with the child long gone and its status
+// available. The stub stream here is never signalled EOF ON PURPOSE: that is
+// what the hang needed.
+// cancellableStream is eofBidiStream with a Cancel that actually unblocks the
+// reader, which is what a real trsf stream does — the shared stub's Cancel is
+// inert, and with it this test could only ever measure the stub.
+type cancellableStream struct{ *eofBidiStream }
+
+func (s *cancellableStream) Cancel() { s.SignalEOF() }
+
+func TestNonPTYChildExitDoesNotWaitForTheStream(t *testing.T) {
+	stream := &cancellableStream{newEOFBidiStream()} // never SignalEOF'd by the test
+	done := make(chan error, 1)
+	go func() {
+		done <- ExecuteCommandWithOption(context.Background(), stream, slog.Default(),
+			"/bin/sh", []string{"-c", "exit 4"}, "", false, nil, ExecuteOption{})
+	}()
+	select {
+	case err := <-done:
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) || ee.ExitCode() != 4 {
+			t.Fatalf("err = %v, want an ExitError carrying 4", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("the child exited but Wait did not return; the stdin copier is " +
+			"blocking it again")
+	}
+}
