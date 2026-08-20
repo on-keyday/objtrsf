@@ -340,9 +340,19 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 		})
 	}
 	gr.Go(handleInput)
+	// childErr is the CHILD's own outcome, kept apart from whatever else the
+	// errgroup collects. Returning gr.Wait()'s error directly looks right and
+	// is not: on Linux the pty master returns EIO the moment the slave closes,
+	// so the stdout copy fails first and that incidental error arrives ahead
+	// of the exit status. Measured -- a clean `exit 0` session came back
+	// "read /dev/ptmx: input/output error", which is how a session that
+	// succeeded gets reported as Failed. gr.Wait() synchronises the write
+	// below with the read after it.
+	var childErr error
 	gr.Go(func() error {
 		defer stream.Cancel() // terminate the input handler
 		err := waitFn()
+		childErr = err
 		procExited.Store(true)
 		// Close the Pty here, AFTER the child has fully exited and been
 		// reaped. This is the SOLE close site on the success path: go-pty's
@@ -354,14 +364,24 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 		if ptyHandle != nil {
 			_ = ptyHandle.Close()
 		}
-		return err
+		// nil, not err: the child's status travels in childErr. Returning it
+		// here would race the pty EIO for "first error in the group", and the
+		// EIO usually wins.
+		return nil
 	})
 	err := gr.Wait()
-	sessionErr = err
-	if err != nil {
-		logger.Error("command execution stream ended with error", "error", err)
-	} else {
+	sessionErr = childErr
+	switch {
+	case childErr != nil:
+		logger.Error("command execution stream ended with a failing child", "error", childErr)
+	case err != nil:
+		// The child was fine; something else in the session was not. Logged,
+		// not returned: after a clean child these are teardown artefacts (the
+		// pty EIO above being the routine one), and reporting them would mark
+		// successful sessions failed.
+		logger.Info("command execution stream ended", "after_clean_child", err)
+	default:
 		logger.Info("command execution stream ended")
 	}
-	return err
+	return childErr
 }
