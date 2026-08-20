@@ -124,6 +124,22 @@ type ExecuteOption struct {
 }
 
 // ExecuteCommandWithOption is the option-bearing form of ExecuteCommand.
+//
+// The error reports how the SESSION ended, including the child's own: a child
+// that exits non-zero comes back as an *exec.ExitError, so a caller can read
+// the real code with errors.As rather than inventing one.
+//
+// Until 2026-08-21 it returned nil unconditionally -- the child's failure was
+// logged and dropped. That made a whole class of outcome unobservable: in the
+// harness that consumes this, every interactive task reported exit 0 and
+// therefore "Succeeded", whatever the agent actually did.
+//
+// Whether a given exit MEANS failure is still the caller's policy, and the
+// caller needs that judgement: killing the child is the ordinary way these
+// sessions end, so a cancelled session arrives here as "signal: killed" and
+// must not be reported as a crash. The same outcome is also delivered to
+// ExecuteOption.Audit's Exit, for callers recording a session rather than
+// branching on it.
 func ExecuteCommandWithOption(ctx context.Context, stream trsf.BidirectionalStream, logger *slog.Logger, command string, args []string, cwd string, ptyEnabled bool, extraEnv []string, opt ExecuteOption) error {
 	return executeCommandImpl(ctx, stream, logger, command, args, cwd, ptyEnabled, extraEnv, opt)
 }
@@ -138,9 +154,21 @@ func ExecuteCommand(ctx context.Context, stream trsf.BidirectionalStream, logger
 func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, logger *slog.Logger, command string, args []string, cwd string, ptyEnabled bool, extraEnv []string, opt ExecuteOption) (retErr error) {
 	defer stream.CloseBoth()
 	logger.Info("Executing command", "command", command, "args", args, "cwd", cwd, "pty", ptyEnabled)
+	// sessionErr is what the session ended with. It is tracked separately from
+	// the named return only because the early-return paths below never reach
+	// gr.Wait; both end up in Audit.Exit. Reporting the named return here used
+	// to mean every Auditor was told every session exited cleanly.
+	var sessionErr error
 	if opt.Audit != nil {
 		opt.Audit.Start(command, args, ptyEnabled)
-		defer func() { opt.Audit.Exit(retErr) }()
+		defer func() {
+			if sessionErr == nil {
+				// The early-return paths below never reach gr.Wait; for those
+				// the named return IS the outcome.
+				sessionErr = retErr
+			}
+			opt.Audit.Exit(sessionErr)
+		}()
 	}
 	gr, grCtx := errgroup.WithContext(ctx)
 	gr.SetLimit(-1)
@@ -311,10 +339,11 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 		return err
 	})
 	err := gr.Wait()
+	sessionErr = err
 	if err != nil {
 		logger.Error("command execution stream ended with error", "error", err)
 	} else {
 		logger.Info("command execution stream ended")
 	}
-	return nil
+	return err
 }
