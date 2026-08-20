@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -174,5 +175,56 @@ func TestNonPTYChildExitDoesNotWaitForTheStream(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("the child exited but Wait did not return; the stdin copier is " +
 			"blocking it again")
+	}
+}
+
+// OnProcessExit reports the child's own ProcessState, which is the reliable
+// source: the errgroup returns whatever failed first, and on Linux a pty's EIO
+// at teardown routinely beats the exit status to it. ProcessState is set by the
+// wait itself and cannot lose that race.
+func TestOnProcessExitCarriesTheChildState(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		code int
+	}{
+		{"clean", []string{"-c", "exit 0"}, 0},
+		{"failing", []string{"-c", "exit 7"}, 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := &cancellableStream{newEOFBidiStream()}
+			var got *os.ProcessState
+			var gotErr error
+			var mu sync.Mutex
+			done := make(chan struct{})
+			_ = ExecuteCommandWithOption(context.Background(), stream, slog.Default(),
+				"/bin/sh", tc.args, "", false, nil, ExecuteOption{
+					OnProcessExit: func(st *os.ProcessState, err error) {
+						mu.Lock()
+						got, gotErr = st, err
+						mu.Unlock()
+						close(done)
+					},
+				})
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("OnProcessExit was never called")
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if got == nil {
+				t.Fatal("OnProcessExit got a nil ProcessState")
+			}
+			if got.ExitCode() != tc.code {
+				t.Errorf("ExitCode() = %d, want %d", got.ExitCode(), tc.code)
+			}
+			if tc.code == 0 && gotErr != nil {
+				t.Errorf("a clean child reported err = %v", gotErr)
+			}
+			if tc.code != 0 && gotErr == nil {
+				t.Errorf("a child that exited %d reported no error", tc.code)
+			}
+		})
 	}
 }

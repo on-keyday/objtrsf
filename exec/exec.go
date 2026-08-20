@@ -121,6 +121,21 @@ type ExecuteOption struct {
 	// stdout / stderr / exit) for the executed command — the remote-shell
 	// audit trail. Nil disables auditing.
 	Audit Auditor
+
+	// OnProcessExit, if non-nil, is called once with the child's own
+	// os.ProcessState after it has been reaped, plus the wait error.
+	//
+	// This is the reliable way to learn how the child ended, and the reason it
+	// exists rather than the caller reading an error type: the errgroup that
+	// runs this session collects whatever fails first, and on Linux the pty
+	// master returns EIO the instant the slave closes — so the incidental
+	// teardown error routinely beats the exit status to the finish line.
+	// ProcessState is not a race; it is set by the wait itself.
+	//
+	// state.ExitCode() is -1 when the child was killed by a signal, which for
+	// these sessions is the ordinary end (a cancel), not a crash. Deciding
+	// what an exit MEANS stays with the caller.
+	OnProcessExit func(state *os.ProcessState, err error)
 }
 
 // ExecuteCommandWithOption is the option-bearing form of ExecuteCommand.
@@ -186,6 +201,9 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 	var ptyHandle pty.Pty
 	var process *os.Process
 	var waitFn func() error
+	// stateFn reads the child's ProcessState after waitFn returns. Both branches
+	// populate one; go-pty copies the exec.Cmd's across.
+	var stateFn func() *os.ProcessState
 	handleInput := func() error {
 		defer pipeIn.Close()
 		for {
@@ -265,6 +283,7 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 		ptyHandle = p
 		process = ptyCmd.Process
 		waitFn = ptyCmd.Wait
+		stateFn = func() *os.ProcessState { return ptyCmd.ProcessState }
 		gr.Go(func() error {
 			// Don't close p here. On Windows, conPty.Close calls
 			// ClosePseudoConsole, and doing so while the output goroutine is
@@ -329,6 +348,7 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 		}()
 		process = cmd.Process
 		waitFn = cmd.Wait
+		stateFn = func() *os.ProcessState { return cmd.ProcessState }
 	}
 	if opt.OnStdinWriter != nil {
 		writeFn := func(p []byte) (int, error) {
@@ -354,6 +374,13 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 		err := waitFn()
 		childErr = err
 		procExited.Store(true)
+		if opt.OnProcessExit != nil {
+			var st *os.ProcessState
+			if stateFn != nil {
+				st = stateFn()
+			}
+			opt.OnProcessExit(st, err)
+		}
 		// Close the Pty here, AFTER the child has fully exited and been
 		// reaped. This is the SOLE close site on the success path: go-pty's
 		// conPty.Close on Windows is non-idempotent (re-invokes
