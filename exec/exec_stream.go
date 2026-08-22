@@ -57,7 +57,15 @@ func NewCommandExecutionStream(stream trsf.BidirectionalStream) *CommandExecutio
 				return
 			}
 			switch hdr.Header.Type {
-			case frame.FrameType_Stdout:
+			// Synth shares Stdout's DESTINATION on purpose. It carries bytes a
+			// server synthesised — a screen repaint, a terminal-mode preamble —
+			// which must reach the terminal exactly like PTY output and at
+			// exactly this position in the stream, so it cannot be routed
+			// elsewhere without losing the ordering that makes it meaningful.
+			// The type exists so a consumer that needs to tell invented bytes
+			// from emitted ones can read frames itself, not so the two land in
+			// different places.
+			case frame.FrameType_Stdout, frame.FrameType_Synth:
 				if hdr.Header.Len == 0 {
 					stdoutPipeW.Close()
 					continue
