@@ -31,6 +31,14 @@ const createNoWindow = 0x08000000
 // Deliberately NOT applied to the PTY path, and the same package's reasoning
 // says why: a PTY session is a process the operator ATTACHES to and is meant to
 // see. Suppressing its window would be suppressing the feature.
+//
+// Measured on a live Windows runner, both halves. Asking the child itself —
+// GetConsoleWindow() through PowerShell — returns 0 down this path and a real
+// handle for the same command typed into a PTY session on the same host, so the
+// flag lands here and stays off there. The operator confirmed no window
+// appeared on the desktop, which is the half no probe from another host can
+// see. (MainWindowHandle was tried first and is useless: it is 0 for a console
+// process either way, because the window belongs to conhost.)
 func applyConsoleWindow(cmd *exec.Cmd, show bool) {
 	if show {
 		return
