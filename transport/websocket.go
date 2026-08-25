@@ -113,6 +113,11 @@ func startTransportLoops(rawSess objproto.RawEndpoint, transportName string,
 						} else {
 							logger.Error("failed to receive websocket message", slog.String("address", c.remoteAddr.String()), slog.String("error", err.Error()))
 						}
+						// Tell the endpoint. Deleting our own entry only makes the
+						// NEXT outbound packet fail into CannotSend, and nothing is
+						// sent to a peer that has gone quiet — so without this the
+						// connection sat until the garbage collector's timeout.
+						CloseConnectionsAt(rawSess, c.remoteAddr, logger)
 						return
 					}
 					rawSess.Receive(transportName, c.remoteAddr, recv)

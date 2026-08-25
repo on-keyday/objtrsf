@@ -214,6 +214,10 @@ func dialAndSend(
 				delete(conns, conn.remoteAddr)
 				connsMu.Unlock()
 				conn.close()
+				// Same reason as the native loop: dropping our own entry only
+				// makes the next outbound packet fail into CannotSend, and a
+				// browser whose server died has nothing to send.
+				CloseConnectionsAt(rawSess, conn.remoteAddr, logger)
 				return
 			}
 		}
