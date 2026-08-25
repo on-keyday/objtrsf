@@ -161,7 +161,27 @@ type ExecuteOption struct {
 	// child's stdin IS the terminal, and OnStdinWriter has nothing to write
 	// into. Silently ignoring either would be a typed option that does nothing.
 	StdinDevNull bool
+
+	// KillProcessTree makes cancellation reach everything the child started,
+	// not just the child.
+	//
+	// os/exec's own cancellation kills the direct child only. That is right for
+	// a command that is one process and wrong for a shell: `sh -c 'sleep 300;
+	// :'` leaves sh dead and sleep running, adopted by init and in nobody's
+	// bookkeeping — measured against a live runner, with the operator's tooling
+	// reporting the command as gone.
+	//
+	// Opt-in, because the same non-PTY path serves callers whose child is a
+	// single process and for whom a group kill would be a widening nobody
+	// asked for. PTY sessions are unaffected: they already have the
+	// HUP/TERM/KILL ladder, and a pty's foreground group is its own mechanism.
+	KillProcessTree bool
 }
+
+// treeKillGrace is how long a process group has to act on SIGTERM before the
+// group is killed outright. Long enough for a test runner or a build tool to
+// tear down, short enough that an operator who asked for a stop gets one.
+const treeKillGrace = 2 * time.Second
 
 // ExecuteCommandWithOption is the option-bearing form of ExecuteCommand.
 //
@@ -366,6 +386,20 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 		})
 	} else {
 		cmd := exec.CommandContext(grCtx, command, args...)
+		// Established BEFORE Start (the unix side needs Setpgid on the attrs,
+		// the Windows side needs the job handle ready) and bound AFTER it.
+		var tree *procTree
+		if opt.KillProcessTree {
+			t, terr := newProcTree(cmd)
+			if terr != nil {
+				return terr
+			}
+			tree = t
+			// release, not kill: this runs after the child has been waited for,
+			// and on Windows the two are the same call.
+			defer tree.release()
+			cmd.Cancel = func() error { return tree.kill(cmd) }
+		}
 		if cwd != "" {
 			cmd.Dir = cwd
 		}
@@ -410,6 +444,14 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 				defer childIn.Close()
 				_, _ = io.Copy(childIn, pipeOut)
 			}()
+		}
+		if tree != nil {
+			// A failure here is not fatal: the child is running and killable
+			// the ordinary way, just not as a tree. Saying so beats pretending
+			// the guarantee holds.
+			if berr := tree.bind(cmd); berr != nil {
+				logger.Warn("process-tree kill unavailable for this child", "error", berr)
+			}
 		}
 		process = cmd.Process
 		waitFn = cmd.Wait
