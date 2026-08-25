@@ -136,6 +136,27 @@ type ExecuteOption struct {
 	// these sessions is the ordinary end (a cancel), not a crash. Deciding
 	// what an exit MEANS stays with the caller.
 	OnProcessExit func(state *os.ProcessState, err error)
+
+	// StdinDevNull gives the child /dev/null as its standard input instead of
+	// a pipe fed from the stream. For a caller that will never send stdin --
+	// an out-of-band command run from a UI with no keyboard attached to it --
+	// this is what the child should have.
+	//
+	// A pipe that is closed shortly after the child starts is NOT the same
+	// thing, which is why this is a mode rather than a convenience. It leaves a
+	// window (measured at 6ms over a LAN) in which the child's stdin is open
+	// and empty, so a program that distinguishes "no input yet" from "end of
+	// input" gets a racing answer. /dev/null has no window and stays readable:
+	// a child that reopens fd 0 still finds EOF.
+	//
+	// Stdin frames that arrive anyway are DROPPED, with one warning. The
+	// alternative -- writing to the closed pipe -- returns ErrClosedPipe and
+	// would fail the whole session for a caller's bookkeeping mistake.
+	//
+	// Refused with ptyEnabled, and refused alongside OnStdinWriter: a PTY
+	// child's stdin IS the terminal, and OnStdinWriter has nothing to write
+	// into. Silently ignoring either would be a typed option that does nothing.
+	StdinDevNull bool
 }
 
 // ExecuteCommandWithOption is the option-bearing form of ExecuteCommand.
@@ -197,6 +218,12 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 		s:         stream,
 		audit:     opt.Audit,
 	}
+	if opt.StdinDevNull && ptyEnabled {
+		return errors.New("exec: StdinDevNull with ptyEnabled: a pty child's stdin is the terminal")
+	}
+	if opt.StdinDevNull && opt.OnStdinWriter != nil {
+		return errors.New("exec: StdinDevNull with OnStdinWriter: there is no pipe to write into")
+	}
 	pipeOut, pipeIn := io.Pipe()
 	var ptyHandle pty.Pty
 	var process *os.Process
@@ -204,6 +231,7 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 	// stateFn reads the child's ProcessState after waitFn returns. Both branches
 	// populate one; go-pty copies the exec.Cmd's across.
 	var stateFn func() *os.ProcessState
+	warnedDroppedStdin := false
 	handleInput := func() error {
 		defer pipeIn.Close()
 		for {
@@ -216,6 +244,16 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 				return err
 			}
 			if hdr.Header.Type == frame.FrameType_Stdin {
+				if opt.StdinDevNull {
+					// Dropped, not written: the child has /dev/null and this
+					// pipe has no reader, so a write would block forever.
+					// Warned once — the caller said it would send none.
+					if !warnedDroppedStdin {
+						warnedDroppedStdin = true
+						logger.Warn("dropping stdin frames: this exec was started with StdinDevNull")
+					}
+					continue
+				}
 				if hdr.Header.Len == 0 { // close stdin
 					pipeIn.Close()
 					continue
@@ -335,17 +373,32 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 		// goroutine outlives it, parked on the same read, until handleInput's
 		// `defer pipeIn.Close()` fires when the stream ends -- which the
 		// deferred stream.CloseBoth guarantees.
-		childIn, err := cmd.StdinPipe()
-		if err != nil {
-			return err
+		if opt.StdinDevNull {
+			// Handed to os/exec as an *os.File, so the child gets the fd
+			// directly: no copier goroutine, and therefore none of the Wait
+			// hazard the comment above describes.
+			devNull, err := os.Open(os.DevNull)
+			if err != nil {
+				return err
+			}
+			defer devNull.Close()
+			cmd.Stdin = devNull
+			if err := cmd.Start(); err != nil {
+				return err
+			}
+		} else {
+			childIn, err := cmd.StdinPipe()
+			if err != nil {
+				return err
+			}
+			if err := cmd.Start(); err != nil {
+				return err
+			}
+			go func() {
+				defer childIn.Close()
+				_, _ = io.Copy(childIn, pipeOut)
+			}()
 		}
-		if err := cmd.Start(); err != nil {
-			return err
-		}
-		go func() {
-			defer childIn.Close()
-			_, _ = io.Copy(childIn, pipeOut)
-		}()
 		process = cmd.Process
 		waitFn = cmd.Wait
 		stateFn = func() *os.ProcessState { return cmd.ProcessState }
