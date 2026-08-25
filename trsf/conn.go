@@ -204,18 +204,45 @@ func (s *Streams) GetReceiveStream(id StreamID) ReceiveStream {
 	return nil
 }
 
+// GetBidirectionalStream resolves a bidirectional id for as long as EITHER half
+// is still live, standing a finished stub in for one that has been reaped.
+//
+// Requiring both was an intersection of two DIFFERENT lifetimes, so a lookup
+// died with the shorter one. recvStreams is dropped on a grace timer after EOF
+// — deliberately, so late retransmits stay routable — while sendStreams is
+// dropped as soon as the run loop sees Completed(). Worse, the peer's CloseBoth
+// cancels the local send half, which drives it to Completed within
+// milliseconds: a remote close could revoke the local caller's only way to
+// reach bytes still sitting unread in recvStreams.
+//
+// A missing half always means FINISHED, never "not created yet": both halves
+// are made together, by CreateBidirectionalStream locally and by getRecvStream
+// for a peer-initiated stream. So the stub reports its direction as over —
+// reads EOF, refuses bytes — rather than pretending the stream is fresh.
+//
+// Unidirectional ids are refused outright. They legitimately have exactly one
+// half, and composing a stub for the other would hand back a bidirectional view
+// of a stream that is not one. The old both-halves rule excluded them as a side
+// effect; relaxing it makes the check load-bearing.
 func (s *Streams) GetBidirectionalStream(id StreamID) BidirectionalStream {
+	if !id.IsBidirectional() {
+		return nil
+	}
 	s.streamsLock.Lock()
 	defer s.streamsLock.Unlock()
-	if rs, ok := s.recvStreams[id]; ok {
-		if sd, ok := s.sendStreams[id]; ok {
-			return &bidiStream{
-				recvStream: rs,
-				sendStream: sd,
-			}
-		}
+	rs, hasRecv := s.recvStreams[id]
+	sd, hasSend := s.sendStreams[id]
+	if !hasRecv && !hasSend {
+		return nil
 	}
-	return nil
+	b := &bidiStream{SendStream: finishedSendStream{id}, ReceiveStream: finishedRecvStream{id}}
+	if hasSend {
+		b.SendStream = sd
+	}
+	if hasRecv {
+		b.ReceiveStream = &wrapRecvStream{rs}
+	}
+	return b
 }
 
 func (s *Streams) getRecvStream(streamID StreamID) *recvStream {
@@ -242,8 +269,8 @@ func (s *Streams) getRecvStream(streamID StreamID) *recvStream {
 				sd := newSendStream(s.ctx, s.mtu, streamID, newFlowController(InitialFlowWindow), s.logger, s.sendTrigger)
 				s.sendStreams[streamID] = sd
 				bs := &bidiStream{
-					recvStream: rs,
-					sendStream: sd,
+					SendStream:    sd,
+					ReceiveStream: &wrapRecvStream{rs},
 				}
 				select {
 				case s.newBidiStreamQueue <- bs:
@@ -760,14 +787,21 @@ func NewStreams(ctx context.Context, isServer bool, initialMTU int, maxMTU int, 
 	return s
 }
 
+// bidiStream joins the two halves of a bidirectional stream. The fields are
+// INTERFACES rather than the concrete streams because a half may be a finished
+// stub — see GetBidirectionalStream.
 type bidiStream struct {
-	*sendStream
-	*recvStream
+	SendStream
+	ReceiveStream
 }
 
+// ID resolves what would otherwise be an ambiguous selector: both embedded
+// interfaces declare it, and both halves of a stream carry the same id.
+func (b *bidiStream) ID() StreamID { return b.SendStream.ID() }
+
 func (b *bidiStream) CloseBoth() error {
-	b.recvStream.Cancel()
-	return b.sendStream.Close()
+	b.ReceiveStream.Cancel()
+	return b.SendStream.Close()
 }
 
 func (r *Streams) CreateBidirectionalStream() BidirectionalStream {
@@ -785,8 +819,8 @@ func (r *Streams) CreateBidirectionalStream() BidirectionalStream {
 	ss.pendingOpen.Store(true)
 	r.sendTrigger.Push(ss)
 	return &bidiStream{
-		sendStream: ss,
-		recvStream: rs,
+		SendStream:    ss,
+		ReceiveStream: &wrapRecvStream{rs},
 	}
 }
 
