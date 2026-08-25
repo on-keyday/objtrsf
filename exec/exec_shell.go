@@ -21,60 +21,14 @@ func (w *CommandExecutionStream) RemoteShell() error {
 	}
 	defer term.Restore(int(os.Stdin.Fd()), old)
 
-	// Restore terminal-emulator-level state that the runner-side agent (or its
-	// ConPTY) may have left enabled, which term.Restore above does NOT cover:
-	// term.Restore only resets the kernel termios line discipline (echo,
-	// canonical mode, signals), not the emulator's screen/cursor/input modes,
-	// which are driven purely by escape sequences. Two groups:
+	// Hand the terminal back in the state a fresh shell expects. Which escapes
+	// that takes, and the symptom each one answers, live on ScreenModeReset and
+	// InputModeReset in terminal_modes.go — this call site only decides WHEN.
 	//
-	//   1. Input modes the ConPTY negotiated at attach: `\x1b[?9001h` Win32
-	//      Input Mode and `\x1b[>4;1m` modifyOtherKeys. When the runner is
-	//      Windows and the local terminal honours them (Windows Terminal,
-	//      conhost, recent mintty), without this a *detach* leaves every
-	//      subsequent keystroke encoded as a multi-byte CSI — so a later
-	//      attach to a Linux runner whose bash readline can't parse them makes
-	//      lowercase input "vanish".
-	//
-	//   2. Screen state a full-screen TUI (htop, less, vim, man …) set and
-	//      never got to tear down: alternate screen buffer (`\x1b[?1049h`),
-	//      hidden cursor (`\x1b[?25l`), mouse reporting (`\x1b[?1000h` /
-	//      1002 / 1003 / 1006), bracketed paste (`\x1b[?2004h`), and stray
-	//      SGR colour. If the user hits Ctrl+] while such an app is still
-	//      running, the app is detached before its atexit cleanup runs, so the
-	//      LOCAL terminal is left with those modes set. Two callers, two
-	//      symptoms:
-	//        - bare CLI attach (no host TUI): the terminal is stranded on the
-	//          alternate screen with the cursor hidden — it goes blank
-	//          ("nothing displayed").
-	//        - the bubbletea host TUI (tea.Exec): bubbletea exits its OWN alt
-	//          screen before running us and re-enters it after (ReleaseTerminal
-	//          / RestoreTerminal). htop's un-torn-down `\x1b[?1049h` means
-	//          bubbletea's re-enter `\x1b[?1049h` fires while the terminal is
-	//          already on an alt buffer, so on some emulators (notably Windows
-	//          conhost / Windows Terminal) the repaint doesn't start from a
-	//          clean buffer and stale panel lines survive. Emitting `?1049l`
-	//          here restores primary-screen parity so bubbletea's re-enter is a
-	//          clean primary→alt toggle; it also clears the leaked mouse
-	//          reporting that bubbletea's RestoreTerminal does not re-disable.
-	//      (On reattach the server's modeTracker deliberately does NOT replay
-	//      alt-screen, so folding it on detach keeps the two paths consistent.)
-	//
-	// The natural-`exit` path is unaffected: closing the agent/ConPTY emits
-	// these resets itself, and re-emitting them is idempotent on a terminal
-	// already in the default state — so emitting unconditionally is safe.
-	// LIFO order: this fires *before* term.Restore so the escape goes out
-	// while stdout is still flushing in raw mode without line buffering.
-	// \x1b[r resets the scroll region (DECSTBM) to the full window and \x1b[?6l
-	// resets origin mode (DECOM). A full-screen app (htop) sets a partial
-	// scroll region while running; if it is detached before tearing down, that
-	// region persists on the LOCAL terminal and confines/mis-positions all
-	// subsequent output — for a bubbletea host TUI this looks like panels
-	// shifted up with a blank lower half (NOT a size bug; verified on the
-	// Windows ConPTY repro — the reported size stays correct throughout, only
-	// the scroll region is wrong). Resetting both is idempotent on a terminal
-	// already at defaults.
-	defer fmt.Fprint(os.Stdout, "\x1b[?9001l\x1b[>4;0m"+
-		"\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[r\x1b[?6l\x1b[0m")
+	// LIFO order is load-bearing: this fires *before* the term.Restore above,
+	// so the escapes go out while stdout is still flushing in raw mode without
+	// line buffering.
+	defer WriteTerminalReset(os.Stdout)
 
 	// sendSize re-queries the local terminal dimensions and forwards them
 	// over the control frame channel. Used both for the initial size and
@@ -94,7 +48,7 @@ func (w *CommandExecutionStream) RemoteShell() error {
 	stopWinSize := startWindowSizeForwarder(w.sendWindowSize)
 	defer stopWinSize()
 
-	return w.pumpTerminalIO(os.Stdin, os.Stdout)
+	return w.PumpTerminalIO(os.Stdin, os.Stdout)
 }
 
 // stdinGoneGrace bounds how long the output direction may run on after the
@@ -116,13 +70,20 @@ var maxSwallowedReadEOF = 64
 // was still live, so the session was torn down rather than left input-dead.
 var ErrLocalInputLost = errors.New("local input path closed")
 
-// pumpTerminalIO splices in→runner and runner→out until either direction ends.
-// RemoteShell passes os.Stdin / os.Stdout; tests pass their own.
+// PumpTerminalIO splices in→runner and runner→out until either direction ends,
+// intercepting the detach key on the way in.
+//
+// RemoteShell passes os.Stdin / os.Stdout. A front end that is NOT a local tty
+// passes its own ends instead — the harness ssh gateway passes an ssh channel,
+// and tests pass theirs. Nothing here touches a terminal: the caller owns raw
+// mode, the window-size forwarder, and writing WriteTerminalReset on the way
+// out, because each of those means something different when the terminal being
+// served is at the far end of a network connection.
 //
 // Both directions must be able to end it: an input pump that dies alone leaves
 // the caller blocked on the output copy with nothing reading the terminal, and
 // raw mode means neither Ctrl+C nor the detach key can get out of that.
-func (w *CommandExecutionStream) pumpTerminalIO(in io.Reader, out io.Writer) error {
+func (w *CommandExecutionStream) PumpTerminalIO(in io.Reader, out io.Writer) error {
 	stdin := w.Stdin()
 	stdout := w.Stdout()
 

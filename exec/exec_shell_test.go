@@ -79,7 +79,7 @@ type readStep struct {
 
 // scriptedReader replays steps in order and then blocks forever, the way a real
 // terminal waits for the next keystroke. It never unblocks: the input pump
-// outlives pumpTerminalIO when the remote side ends first, so waking it during
+// outlives PumpTerminalIO when the remote side ends first, so waking it during
 // teardown would race the test's restore of the package-level hooks. Tests that
 // need the pump gone script a terminal error as the last step.
 type scriptedReader struct {
@@ -118,7 +118,7 @@ func shortGrace(t *testing.T) {
 func runPump(t *testing.T, w *CommandExecutionStream, in io.Reader, out io.Writer) <-chan error {
 	t.Helper()
 	done := make(chan error, 1)
-	go func() { done <- w.pumpTerminalIO(in, out) }()
+	go func() { done <- w.PumpTerminalIO(in, out) }()
 	return done
 }
 
@@ -139,7 +139,7 @@ func awaitPump(t *testing.T, done <-chan error, within time.Duration) error {
 	case err := <-done:
 		return err
 	case <-time.After(within):
-		t.Fatalf("pumpTerminalIO did not return within %v — the session is wedged", within)
+		t.Fatalf("PumpTerminalIO did not return within %v — the session is wedged", within)
 		return nil
 	}
 }
@@ -158,7 +158,7 @@ func TestPumpTerminalIO_RemoteEndEndsSession(t *testing.T) {
 	stream.SignalEOF()
 
 	if err := awaitPump(t, done, 2*time.Second); err != nil {
-		t.Fatalf("pumpTerminalIO = %v, want nil", err)
+		t.Fatalf("PumpTerminalIO = %v, want nil", err)
 	}
 	if out.String() != "hi" {
 		t.Fatalf("out = %q, want %q", out.String(), "hi")
@@ -180,10 +180,10 @@ func TestPumpTerminalIO_InputDeathEndsSession(t *testing.T) {
 	// which is exactly the case that used to block forever.
 	err := awaitPump(t, runPump(t, ces, in, io.Discard), 2*time.Second)
 	if !errors.Is(err, ErrLocalInputLost) {
-		t.Fatalf("pumpTerminalIO = %v, want it to wrap ErrLocalInputLost", err)
+		t.Fatalf("PumpTerminalIO = %v, want it to wrap ErrLocalInputLost", err)
 	}
 	if !errors.Is(err, readErr) {
-		t.Fatalf("pumpTerminalIO = %v, want it to wrap the underlying read error", err)
+		t.Fatalf("PumpTerminalIO = %v, want it to wrap the underlying read error", err)
 	}
 }
 
@@ -200,7 +200,7 @@ func TestPumpTerminalIO_ForwardWriteFailureEndsSession(t *testing.T) {
 
 	err := awaitPump(t, runPump(t, ces, in, io.Discard), 2*time.Second)
 	if !errors.Is(err, ErrLocalInputLost) || !errors.Is(err, writeErr) {
-		t.Fatalf("pumpTerminalIO = %v, want ErrLocalInputLost wrapping %v", err, writeErr)
+		t.Fatalf("PumpTerminalIO = %v, want ErrLocalInputLost wrapping %v", err, writeErr)
 	}
 }
 
@@ -225,7 +225,7 @@ func TestPumpTerminalIO_DetachEndsWhenPeerCloses(t *testing.T) {
 	stream.SignalEOF()
 
 	if err := awaitPump(t, done, 2*time.Second); err != nil {
-		t.Fatalf("pumpTerminalIO = %v, want nil for a detach", err)
+		t.Fatalf("PumpTerminalIO = %v, want nil for a detach", err)
 	}
 	if got := stream.forwarded(); !bytes.Contains(got, []byte("ab")) {
 		t.Fatalf("forwarded = %q, want the bytes before the detach key", got)
@@ -245,7 +245,7 @@ func TestPumpTerminalIO_DetachGivesUpOnSilentPeer(t *testing.T) {
 	in := newScriptedReader(readStep{data: []byte{0x1d}})
 
 	if err := awaitPump(t, runPump(t, ces, in, io.Discard), 2*time.Second); err != nil {
-		t.Fatalf("pumpTerminalIO = %v, want nil — a slow peer must not turn a detach into a failure", err)
+		t.Fatalf("PumpTerminalIO = %v, want nil — a slow peer must not turn a detach into a failure", err)
 	}
 }
 
@@ -272,7 +272,7 @@ func TestPumpTerminalIO_SwallowedReadErrorKeepsInputAlive(t *testing.T) {
 
 	err := awaitPump(t, runPump(t, ces, in, io.Discard), 2*time.Second)
 	if !errors.Is(err, stop) {
-		t.Fatalf("pumpTerminalIO = %v, want it to end on the scripted terminal error", err)
+		t.Fatalf("PumpTerminalIO = %v, want it to end on the scripted terminal error", err)
 	}
 	if got := stream.forwarded(); !bytes.Contains(got, []byte("next")) {
 		t.Fatalf("forwarded = %q, want it to contain %q — the input pump did not survive the artefact",
@@ -296,7 +296,7 @@ func TestPumpTerminalIO_SwallowIsBounded(t *testing.T) {
 
 	err := awaitPump(t, runPump(t, ces, &repeatingReader{err: io.EOF}, io.Discard), 2*time.Second)
 	if !errors.Is(err, ErrLocalInputLost) {
-		t.Fatalf("pumpTerminalIO = %v, want ErrLocalInputLost once the swallow limit is reached", err)
+		t.Fatalf("PumpTerminalIO = %v, want ErrLocalInputLost once the swallow limit is reached", err)
 	}
 	if got := stream.forwarded(); len(got) != 0 {
 		t.Fatalf("forwarded = %q, want nothing — a swallowed keystroke must not reach the runner", got)
