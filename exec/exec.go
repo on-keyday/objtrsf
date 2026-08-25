@@ -151,7 +151,11 @@ type ExecuteOption struct {
 	//
 	// Stdin frames that arrive anyway are DROPPED, with one warning. The
 	// alternative -- writing to the closed pipe -- returns ErrClosedPipe and
-	// would fail the whole session for a caller's bookkeeping mistake.
+	// would fail the whole session for a caller's bookkeeping mistake. A
+	// 0-length frame (a close) is dropped SILENTLY: closing a stdin already at
+	// EOF is a no-op, and a client that sends one defensively -- because it
+	// cannot know whether the runner on the far side honours this mode -- must
+	// not produce a warning per exec.
 	//
 	// Refused with ptyEnabled, and refused alongside OnStdinWriter: a PTY
 	// child's stdin IS the terminal, and OnStdinWriter has nothing to write
@@ -245,6 +249,14 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 			}
 			if hdr.Header.Type == frame.FrameType_Stdin {
 				if opt.StdinDevNull {
+					// A close (0-length) is not stdin the caller promised not
+					// to send: closing something already at EOF is a no-op, and
+					// a client that sends one defensively — because it cannot
+					// know whether the runner honours this mode — must not
+					// produce a warning per exec.
+					if hdr.Header.Len == 0 {
+						continue
+					}
 					// Dropped, not written: the child has /dev/null and this
 					// pipe has no reader, so a write would block forever.
 					// Warned once — the caller said it would send none.

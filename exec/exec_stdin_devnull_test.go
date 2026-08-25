@@ -69,6 +69,34 @@ func TestStdinDevNullIsAReadableDevNull(t *testing.T) {
 	}
 }
 
+// A defensive close from a client that cannot know whether the runner honours
+// this mode is a silent no-op, not a dropped frame: it must not warn per exec.
+func TestStdinDevNullCloseFrameIsSilentlyIgnored(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh")
+	}
+	stream := &cancellableStream{newEOFBidiStream()}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		w := &stdinWrapper{s: stream}
+		_ = w.Close() // the 0-length Stdin frame
+	}()
+	done := make(chan error, 1)
+	go func() {
+		done <- ExecuteCommandWithOption(context.Background(), stream, slog.Default(),
+			"/bin/sh", []string{"-c", "cat; exit 0"}, "", false, nil,
+			ExecuteOption{StdinDevNull: true})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("a defensive close failed the session: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("a defensive close blocked the session")
+	}
+}
+
 // Stdin frames that arrive anyway are dropped rather than failing the session.
 // Writing them to the unread pipe would block forever; closing the pipe first
 // and writing would return ErrClosedPipe and take the whole exec down for a
