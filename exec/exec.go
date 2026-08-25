@@ -176,6 +176,21 @@ type ExecuteOption struct {
 	// asked for. PTY sessions are unaffected: they already have the
 	// HUP/TERM/KILL ladder, and a pty's foreground group is its own mechanism.
 	KillProcessTree bool
+
+	// ShowConsoleWindow keeps the console window a Windows console application
+	// gets. Default OFF: the child runs without one.
+	//
+	// An opt-OUT rather than an opt-in, because the default is only ever wrong
+	// for a process the operator is meant to SEE — and the path that serves
+	// those is the PTY one, which this flag does not touch. Everything on the
+	// non-PTY path has its output carried over the stream instead, so a window
+	// on the far side's desktop shows nothing anybody reads.
+	//
+	// Whether a window appears at all depends on the parent: a child inherits
+	// an existing console and pops nothing, so a runner started from a terminal
+	// hides the problem completely, while one started by Task Scheduler or as a
+	// service gives every child a new window for as long as it lives.
+	ShowConsoleWindow bool
 }
 
 // treeKillGrace is how long a process group has to act on SIGTERM before the
@@ -400,6 +415,7 @@ func executeCommandImpl(ctx context.Context, stream trsf.BidirectionalStream, lo
 			defer tree.release()
 			cmd.Cancel = func() error { return tree.kill(cmd) }
 		}
+		applyConsoleWindow(cmd, opt.ShowConsoleWindow)
 		if cwd != "" {
 			cmd.Dir = cwd
 		}
