@@ -888,7 +888,7 @@ func (s *endpoint) addActiveConnection(cid ConnectionID, selfSecret []byte, peer
 			peerHeaderProtect: peerHeaderProtectBlock,
 			transcript:        transcript,
 			// newly created
-			msgs:   NewMessageChannel(10, s.logger),
+			msgs:   NewMessageChannel(messageChannelDepth, s.logger),
 			closed: make(chan struct{}),
 		}
 	}
@@ -989,6 +989,27 @@ func (s *endpoint) receiveHandshakeAck(cid ConnectionID, hs *packet.Handshake, o
 	}
 	return nil
 }
+
+// messageChannelDepth is how many received messages may sit between the
+// socket reader and the application before SendMessage has to fall back to a
+// goroutine per message (see objproto/message.go).
+//
+// It was 10, and 10 is far too few for a bulk transfer: measured over one
+// 16 MB transfer, 59.5% of messages took the goroutine path, the reorder
+// buffer that exists to repair their ordering grew to 173 entries and was
+// scanned 230,726 times, and **the process peaked at 523 goroutines** for a
+// connection that structurally needs about nine. Nearly all of them were
+// senders blocked on this channel, at 8 KB of stack apiece.
+//
+// At 256 the fallback stops being used at all -- 0.0% of messages, reorder
+// buffer never past 17 -- and the peak drops to 14 goroutines. The channel
+// holds at most 256 message references, so it keeps up to ~384 KB of payload
+// alive per connection; that is an order of magnitude LESS than the ~4 MB of
+// blocked-sender stacks it replaces, so raising it costs no memory, it saves
+// it. Throughput is worth about +7% on the udp benchmark rung, which is only
+// marginally above what that benchmark resolves -- the goroutine count is the
+// solid part of this.
+const messageChannelDepth = 256
 
 func (s *endpoint) receiveApplication(cid ConnectionID, data []byte, hdr *packet.PacketHeader) error {
 	s.endpointLock.RLock()
