@@ -51,6 +51,16 @@ import (
 //	benchstat old.txt new.txt
 //
 // TRSF_BENCH_MB overrides the per-iteration transfer size (default 32).
+//
+// **CHECK THE MACHINE'S LOAD FIRST, and the relay rungs need it near zero.**
+// A relay rung runs three connections and four transports in this one
+// process; on a busy box it swung 20.6–29.1 MB/s while mock (144.7–155.1) and
+// udp (87.1–90.6) held steady over the same period. Two interleaved 20-run
+// sets then disagreed by 26 points on the same comparison — so the ± figure
+// computed from a single run's stdev UNDERSTATES the real error whenever
+// something else is running, and a relay-rung difference under ~25% taken on
+// a loaded box is not a result. mock and udp are far more forgiving; mock is
+// also the control for any objproto-side change, since it never reaches it.
 
 // benchSizeMB is the payload moved per benchmark iteration. Small enough that
 // -count 10 stays interactive, large enough that connection setup and the
@@ -81,8 +91,9 @@ func BenchmarkThroughput(b *testing.B) {
 	}{
 		{"mock", mockPair},
 		{"udp", udpPair},
-		{"relay", relayPair(spliceOneWay)},
-		{"relay-pipelined", relayPair(splicePipelined)},
+		{"relay", relayPair(spliceOneWay, false)},
+		{"relay-pipelined", relayPair(splicePipelined, false)},
+		{"relay-2ep", relayPair(spliceOneWay, true)},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			ctx := b.Context()
@@ -207,13 +218,13 @@ func udpPair(tb testing.TB) (trsf.Transport, trsf.Transport) {
 // of goroutines that drives it (transport/udp.go): that sharing is part of
 // what is being measured, so splitting the legs across two endpoints here
 // would measure a topology nobody runs.
-func relayPair(splice func(context.Context, trsf.ReceiveStream, trsf.SendStream)) func(testing.TB) (trsf.Transport, trsf.Transport) {
+func relayPair(splice func(context.Context, trsf.ReceiveStream, trsf.SendStream), splitEndpoints bool) func(testing.TB) (trsf.Transport, trsf.Transport) {
 	return func(tb testing.TB) (trsf.Transport, trsf.Transport) {
-		return newRelayPair(tb, splice)
+		return newRelayPair(tb, splice, splitEndpoints)
 	}
 }
 
-func newRelayPair(tb testing.TB, splice func(context.Context, trsf.ReceiveStream, trsf.SendStream)) (trsf.Transport, trsf.Transport) {
+func newRelayPair(tb testing.TB, splice func(context.Context, trsf.ReceiveStream, trsf.SendStream), splitEndpoints bool) (trsf.Transport, trsf.Transport) {
 	ctx := tb.Context()
 	log := slog.New(slog.DiscardHandler)
 
@@ -223,8 +234,22 @@ func newRelayPair(tb testing.TB, splice func(context.Context, trsf.ReceiveStream
 	relayEP := udpEndpoint(tb, relayPort, log)
 	sinkEP := udpEndpoint(tb, sinkPort, log)
 
+	// splitEndpoints gives the relay's outbound leg a socket, and therefore a
+	// sender and reader goroutine, of its own. It is the test for whether
+	// those being per-endpoint is what a relay pays: with one endpoint both
+	// legs funnel through a single pair, with two they do not, and nothing
+	// else differs between the two rungs.
+	//
+	// NOT ESTABLISHED either way. Three run sets gave +8.1%, -17.7%, -13.7%
+	// — the sign does not even hold, all of them on a loaded box. What can be
+	// said is only that nothing here supports a second endpoint HELPING.
+	// Re-run it on an idle machine before believing any of those numbers.
+	relayDialEP := relayEP
+	if splitEndpoints {
+		relayDialEP = udpEndpoint(tb, 0, log)
+	}
 	sourceConn, relayInbound := udpConnPair(tb, ctx, sourceEP, relayEP, relayPort)
-	relayOutbound, sinkConn := udpConnPair(tb, ctx, relayEP, sinkEP, sinkPort)
+	relayOutbound, sinkConn := udpConnPair(tb, ctx, relayDialEP, sinkEP, sinkPort)
 
 	source := trsfOver(ctx, false, sourceConn, log)
 	relayIn := trsfOver(ctx, true, relayInbound, log)
@@ -271,15 +296,19 @@ func spliceOneWay(ctx context.Context, src trsf.ReceiveStream, dst trsf.SendStre
 // splicePipelined is spliceOneWay with the read and the write decoupled by a
 // bounded queue, so the two legs can be busy at once.
 //
-// **It is 17.1% SLOWER than the alternating version** (29.1 -> 24.1 MB/s over
-// 8 runs each, resolving ±11%), and it is kept as the standing evidence for
-// that. Decoupling a relay's two legs is an obvious-looking idea that gets
-// proposed from the shape of the code — the alternation is real, and the
-// legs really never overlap — but the alternation is not what the relay rung
-// costs. A relay does the work twice, receive and decrypt then encrypt and
-// send, both through the one endpoint's single sender and reader; the
-// overlap this buys is worth less than the extra handoff and queue it costs.
-// Anything aimed at the relay's ~2.5x has to beat 29.1, not 24.1.
+// **It never went faster than the alternating version.** Four independent run
+// sets put it at -17.1%, -1.2%, -8.3% and -19.3%: the direction is consistent
+// and the magnitude is not, so read it as "decoupling does not help", never as
+// a number. (An earlier commit here claimed the -17.1% as the result; it did
+// not reproduce. See the load caveat at the top of this file.)
+//
+// Decoupling a relay's two legs is an obvious-looking idea that the shape of
+// the code keeps suggesting — the alternation is real, and the legs really
+// never overlap. But the alternation is not what the relay rung costs. A
+// relay does the work twice, receive and decrypt then encrypt and send, both
+// through the one endpoint's single sender and reader, and the overlap a
+// queue buys is worth less than the handoff it adds. This is kept as the
+// cheapest way to stop the idea being proposed a third time.
 func splicePipelined(ctx context.Context, src trsf.ReceiveStream, dst trsf.SendStream) {
 	// Depth 8, so the reader can run ahead by half a megabyte at 64 KB a
 	// chunk without becoming an unbounded buffer in front of the send
