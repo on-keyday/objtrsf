@@ -1,6 +1,7 @@
 package trsf
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -150,26 +151,35 @@ func (ah *SentPacketHandler) PacingTimeout() time.Time {
 func (ah *SentPacketHandler) addBytesInFlight(size int) {
 	prev := ah.bytesInFlight
 	ah.bytesInFlight += size
-	var sentRanges []int = make([]int, len(ah.sentRanges))
-	sum := 0
-	for i := range ah.sentRanges {
-		if ah.sentRanges[i].IsMTUProbe {
-			continue // ignore MTU probes
-		}
-		sentRanges[i] = int(ah.sentRanges[i].PacketSize)
-		sum += int(ah.sentRanges[i].PacketSize)
-	}
-	if sum != ah.bytesInFlight {
-		ah.logger.Error("Inconsistent bytes in flight", "expected", ah.bytesInFlight, "actual", sum)
-	}
-	ah.logger.Debug("Added bytes in flight", "prev_bytes_in_flight", prev, "bytes_in_flight", ah.bytesInFlight, "ranges", sentRanges)
+	ah.auditBytesInFlight("Added bytes in flight", prev)
 }
 
 func (ah *SentPacketHandler) removeBytesInFlight(size int) {
 	prev := ah.bytesInFlight
 	ah.bytesInFlight -= size
+	ah.auditBytesInFlight("Removed bytes in flight", prev)
+}
+
+// auditBytesInFlight re-derives bytesInFlight from sentRanges and complains if
+// it disagrees with the counter the two callers maintain incrementally.
+//
+// It is gated on Debug being enabled, and that gate is load-bearing rather
+// than tidiness. The audit allocates a slice the length of sentRanges and
+// walks every in-flight packet — once per packet SENT, so O(n^2) across a
+// window. That was invisible while the window was two packets wide. Once the
+// UDP receive buffer stopped overflowing and the window reached 2.8 MB,
+// sentRanges held ~2000 entries and this showed up on the server's CPU
+// profile as 16% mallocgc plus 10% GC: fixing one bottleneck had fed the next
+// one, because the cost scales with exactly the thing that got better.
+//
+// The counter itself is unchanged and still exact; only its verification is
+// now something you opt into.
+func (ah *SentPacketHandler) auditBytesInFlight(msg string, prev int) {
+	if !ah.logger.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	sentRanges := make([]int, len(ah.sentRanges))
 	sum := 0
-	var sentRanges []int = make([]int, len(ah.sentRanges))
 	for i := range ah.sentRanges {
 		if ah.sentRanges[i].IsMTUProbe {
 			continue // ignore MTU probes
@@ -180,7 +190,7 @@ func (ah *SentPacketHandler) removeBytesInFlight(size int) {
 	if sum != ah.bytesInFlight {
 		ah.logger.Error("Inconsistent bytes in flight", "expected", ah.bytesInFlight, "actual", sum)
 	}
-	ah.logger.Debug("Removed bytes in flight", "prev_bytes_in_flight", prev, "bytes_in_flight", ah.bytesInFlight, "ranges", sentRanges)
+	ah.logger.Debug(msg, "prev_bytes_in_flight", prev, "bytes_in_flight", ah.bytesInFlight, "ranges", sentRanges)
 }
 
 func (ah *SentPacketHandler) OnSent(s *SentPacket) error {
