@@ -208,8 +208,16 @@ func (ah *SentPacketHandler) OnSent(s *SentPacket) error {
 
 func (ah *SentPacketHandler) detectAck(rcvTime time.Time, ranges []Range) ([]*SentPacket, error) {
 	var ackedPackets []*SentPacket
-	var newRemainPackets []*SentPacket
 	var ackedPN []objproto.PacketNumber
+	// Both the kept-set and the acked-packet-number list used to be built as
+	// fresh slices on every ACK, growing back to the length of what was in
+	// flight -- the same shape as the onACK filter and the cc75e99 audit, and
+	// like them it only bites once the congestion window is open. The kept
+	// set is now filtered in place, and ackedPN is only assembled when
+	// something will actually read it.
+	debug := ah.logger.Enabled(context.Background(), slog.LevelDebug)
+	origLen := len(ah.sentRanges)
+	newRemainPackets := ah.sentRanges[:0]
 	for _, p := range ah.sentRanges {
 		acked := false
 		for i := range ranges {
@@ -224,7 +232,9 @@ func (ah *SentPacketHandler) detectAck(rcvTime time.Time, ranges []Range) ([]*Se
 			}
 			// acked
 			ackedPackets = append(ackedPackets, p)
-			ackedPN = append(ackedPN, p.PacketNumber)
+			if debug {
+				ackedPN = append(ackedPN, p.PacketNumber)
+			}
 			acked = true
 			break
 		}
@@ -232,9 +242,14 @@ func (ah *SentPacketHandler) detectAck(rcvTime time.Time, ranges []Range) ([]*Se
 			newRemainPackets = append(newRemainPackets, p)
 		}
 	}
-	ah.logger.Debug("Processing ACK", "acked_packets", ackedPN)
-	if len(newRemainPackets)+len(ackedPackets) != len(ah.sentRanges) {
+	if debug {
+		ah.logger.Debug("Processing ACK", "acked_packets", ackedPN)
+	}
+	if len(newRemainPackets)+len(ackedPackets) != origLen {
 		return nil, errors.New("BUG: inconsistent ack detection")
+	}
+	for i := len(newRemainPackets); i < origLen; i++ {
+		ah.sentRanges[i] = nil
 	}
 	ah.sentRanges = newRemainPackets
 	sentSize := 0
@@ -271,7 +286,11 @@ func (ah *SentPacketHandler) detectLost(now time.Time) {
 
 	somePacketLost := false
 
-	remainRanges := make([]*SentPacket, 0)
+	// Filtered in place, like detectAck above. OnLost only pushes to the
+	// stream's own retransmit queue and trigger, so it cannot touch this
+	// slice while the loop is walking it.
+	origLen := len(ah.sentRanges)
+	remainRanges := ah.sentRanges[:0]
 	lostSize := 0
 	lostCount := 0
 	mtuProbe := 0
@@ -311,8 +330,11 @@ func (ah *SentPacketHandler) detectLost(now time.Time) {
 			remainRanges = append(remainRanges, p)
 		}
 	}
-	if len(remainRanges)+lostCount != len(ah.sentRanges) {
-		ah.logger.Error("BUG: inconsistent loss detection", "expected", len(ah.sentRanges), "actual", len(remainRanges)+lostCount)
+	if len(remainRanges)+lostCount != origLen {
+		ah.logger.Error("BUG: inconsistent loss detection", "expected", origLen, "actual", len(remainRanges)+lostCount)
+	}
+	for i := len(remainRanges); i < origLen; i++ {
+		ah.sentRanges[i] = nil
 	}
 	ah.sentRanges = remainRanges
 	if somePacketLost {

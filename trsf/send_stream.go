@@ -349,6 +349,15 @@ func (r *sendStream) onACK(pkt *SentRange, now time.Time) {
 	//
 	// Writes trail reads over the same backing array, so this is safe; the
 	// tail is nil'd so the dropped ranges are not kept alive by it.
+	// ACKs arrive in send order and sentRanges is appended in send order, so
+	// the match is nearly always the head. Dropping it is O(1) and moves
+	// nothing; the filter below is the fallback for out-of-order ACKs.
+	if len(r.sentRanges) > 0 && r.sentRanges[0] == pkt {
+		r.sentRanges[0] = nil
+		r.sentRanges = r.sentRanges[1:]
+		r.sendTrigger.Push(r)
+		return
+	}
 	kept := r.sentRanges[:0]
 	for _, sr := range r.sentRanges {
 		if sr != pkt {
