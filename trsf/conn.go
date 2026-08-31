@@ -160,6 +160,10 @@ type InternalState struct {
 	RTTVariance          time.Duration
 	SentPackets          []InternalSentPacket
 	LoopIterations       uint64
+	// Loss is the loss detector's account of itself. Spurious rising during a
+	// transfer means the congestion response is being driven by packets that
+	// were only late — see LossStats.
+	Loss LossStats
 }
 
 func (s *Streams) GetInternalState() *InternalState {
@@ -167,7 +171,7 @@ func (s *Streams) GetInternalState() *InternalState {
 	activeSendStream := len(s.sendStreams)
 	activeRecvStream := len(s.recvStreams)
 	s.streamsLock.Unlock()
-	sentRanges, bytesInFlight, congestionWindow, smoothedRTT, rttVariance := s.sh.GetInternal()
+	sentRanges, bytesInFlight, congestionWindow, smoothedRTT, rttVariance, lossStats := s.sh.GetInternal()
 	return &InternalState{
 		ActiveSendStreams:    activeSendStream,
 		ActiveReceiveStreams: activeRecvStream,
@@ -183,6 +187,7 @@ func (s *Streams) GetInternalState() *InternalState {
 		RTTVariance:          rttVariance,
 		SentPackets:          sentRanges,
 		LoopIterations:       s.loopIter.Load(),
+		Loss:                 lossStats,
 	}
 }
 

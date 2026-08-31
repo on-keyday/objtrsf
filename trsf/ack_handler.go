@@ -31,7 +31,70 @@ type SentPacketHandler struct {
 
 	ptoCount int
 
+	loss         LossStats
+	declaredLost []objproto.PacketNumber
+
 	*trigger
+}
+
+// LossStats is the loss detector's account of itself.
+//
+// Spurious is the diagnostic one. A packet this handler gave up on and then
+// saw acknowledged was never lost, so the congestion response taken on it was
+// taken on nothing — and since that response is what sets the sending rate,
+// a Spurious that climbs with the transfer says the rate is being governed by
+// a measurement error rather than by the path.
+//
+// Events is separate from Packets because one call to detectLost can retire
+// several packets while producing a single congestion response; it is Events
+// that the window pays for.
+type LossStats struct {
+	Events   int // congestion responses taken (RecordLoss calls)
+	Packets  int // non-probe packets declared lost
+	Spurious int // ...of which an ACK arrived afterwards
+}
+
+// How many declared-lost packet numbers to keep for the spurious check. It
+// only has to outlive the reordering/ACK-delay window, not the connection, so
+// this is a ring rather than a growing set: an unbounded one on a long
+// transfer would be a leak in the name of diagnostics.
+const maxDeclaredLostTracked = 256
+
+func (ah *SentPacketHandler) rememberDeclaredLost(pn objproto.PacketNumber) {
+	if len(ah.declaredLost) >= maxDeclaredLostTracked {
+		copy(ah.declaredLost, ah.declaredLost[1:])
+		ah.declaredLost = ah.declaredLost[:len(ah.declaredLost)-1]
+	}
+	ah.declaredLost = append(ah.declaredLost, pn)
+}
+
+// noteSpuriousLoss counts, and forgets, every declared-lost packet number the
+// incoming ACK covers. Called before detectAck prunes sentRanges, though the
+// order does not matter: these packets were already removed from sentRanges
+// when they were declared lost, which is exactly why the ACK for them would
+// otherwise pass unnoticed.
+func (ah *SentPacketHandler) noteSpuriousLoss(ranges []Range) {
+	if len(ah.declaredLost) == 0 {
+		return
+	}
+	remain := ah.declaredLost[:0]
+	for _, pn := range ah.declaredLost {
+		covered := false
+		for _, rg := range ranges {
+			if pn >= rg.Begin && pn < rg.End {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			ah.loss.Spurious++
+			ah.logger.Debug("spurious loss: declared lost, later acked", "pn", pn,
+				"spurious_total", ah.loss.Spurious, "loss_events", ah.loss.Events)
+			continue
+		}
+		remain = append(remain, pn)
+	}
+	ah.declaredLost = remain
 }
 
 func NewSentPacketHandler(logger *slog.Logger, rtt *congestion.RTTStats, cong congestion.CongestionControl) *SentPacketHandler {
@@ -54,7 +117,7 @@ type SentPacket struct {
 	Kind         wire.ApplicationPayloadKind
 }
 
-func (ah *SentPacketHandler) GetInternal() ([]InternalSentPacket, int, int, time.Duration, time.Duration) {
+func (ah *SentPacketHandler) GetInternal() ([]InternalSentPacket, int, int, time.Duration, time.Duration, LossStats) {
 	ah.m.Lock()
 	defer ah.m.Unlock()
 	var sentRanges []InternalSentPacket = make([]InternalSentPacket, 0, len(ah.sentRanges))
@@ -67,7 +130,7 @@ func (ah *SentPacketHandler) GetInternal() ([]InternalSentPacket, int, int, time
 			StreamID:   p.StreamID,
 		})
 	}
-	return sentRanges, ah.bytesInFlight, ah.cong.GetCongestionWindow(), ah.rtt.SRTT, ah.rtt.RTTVAR
+	return sentRanges, ah.bytesInFlight, ah.cong.GetCongestionWindow(), ah.rtt.SRTT, ah.rtt.RTTVAR, ah.loss
 }
 
 func (ah *SentPacketHandler) CanSend() bool {
@@ -228,6 +291,11 @@ func (ah *SentPacketHandler) detectLost(now time.Time) {
 			if p.IsMTUProbe {
 				mtuProbe++
 				probeSize += p.PacketSize
+			} else {
+				// MTU probes are expected to be lost — that is how the probe
+				// reports a too-large MTU — so they are not evidence about the
+				// path and do not belong in the spurious count either.
+				ah.rememberDeclaredLost(p.PacketNumber)
 			}
 		} else {
 			remainRanges = append(remainRanges, p)
@@ -239,7 +307,9 @@ func (ah *SentPacketHandler) detectLost(now time.Time) {
 	ah.sentRanges = remainRanges
 	if somePacketLost {
 		ah.removeBytesInFlight(lostSize - probeSize)
+		ah.loss.Packets += lostCount - mtuProbe
 		if lostCount > mtuProbe { // ignore congestion for MTU probes
+			ah.loss.Events++
 			ah.cong.RecordLoss(lostSize-probeSize, now)
 		}
 	}
@@ -306,6 +376,10 @@ func (ah *SentPacketHandler) ReceiveACK(rcvTime time.Time, r []Range) error {
 	if largest > ah.largestSent {
 		return fmt.Errorf("received invalid ACK: largest acked %d > largest sent %d", largest, ah.largestSent)
 	}
+	// Before detectAck: a packet already declared lost is no longer in
+	// sentRanges, so detectAck cannot see the ACK that vindicates it. This is
+	// the only place that evidence exists.
+	ah.noteSpuriousLoss(r)
 	ackedPackets, err := ah.detectAck(rcvTime, r)
 	if err != nil {
 		return err

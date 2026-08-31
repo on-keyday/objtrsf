@@ -93,11 +93,25 @@ func (p *newReno) RecordLoss(size int, now time.Time) {
 		// avoid multiple reductions in short time
 		return
 	}
+	prev := p.cwnd
 	p.ssthresh = p.cwnd / 2
 	if p.ssthresh < p.mtu.CurrentMTU()*2 {
 		p.ssthresh = p.mtu.CurrentMTU() * 2
 	}
-	p.cwnd = p.mtu.CurrentMTU() * 2 // reset to initial CWND
+	// Multiplicative decrease: the window becomes ssthresh, i.e. half of what
+	// it was. This line used to reset it to the initial mtu*2 instead, which
+	// is the response to a TIMEOUT — nothing coming back at all — and not to
+	// one packet looking lost while ACKs keep flowing. The two signals mean
+	// different things and this function only ever sees the mild one; the PTO
+	// path deliberately does not call it.
+	//
+	// Measured before the change, pushing 200 MB over a 2 ms link that dropped
+	// nothing (tc reported `dropped 0` across 287 MB): the sending connection
+	// sat at cwnd 2928-4517 bytes — mtu*2, this reset's value, re-applied
+	// about once a second — while the peer connection on the same host reached
+	// 336-902 KB. Throughput ≈ cwnd/RTT, so that pinned the transfer near
+	// 2 MB/s on a path raw TCP crossed at 508 MB/s.
+	p.cwnd = p.ssthresh
 	p.lastLossTime = now
-	p.logger.Debug("NewReno RecordLoss", "cwnd", p.cwnd, "ssthresh", p.ssthresh)
+	p.logger.Debug("NewReno RecordLoss", "prev_cwnd", prev, "cwnd", p.cwnd, "ssthresh", p.ssthresh)
 }
