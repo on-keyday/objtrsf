@@ -1356,7 +1356,13 @@ func (s *endpoint) sendApplicationFrame(cid ConnectionID, data []byte, a *active
 	}
 	pktLength := len(pktData)
 	s.sendPacket(cid, packet.PacketKind_Application, pktData)
-	s.logger.Debug("sent application packet", "cid", cid.String())
+	// Guarded: this runs once per application packet, and cid.String() is a
+	// fmt.Sprintf plus an AddrPort.String, evaluated at the call site whether
+	// or not anything logs it. That was 10.2% of the process's allocations
+	// with a discarding handler installed.
+	if s.logger.Enabled(context.Background(), slog.LevelDebug) {
+		s.logger.Debug("sent application packet", "cid", cid.String())
+	}
 	return pktLength, count, nil
 }
 
