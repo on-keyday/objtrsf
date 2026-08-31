@@ -81,7 +81,8 @@ func BenchmarkThroughput(b *testing.B) {
 	}{
 		{"mock", mockPair},
 		{"udp", udpPair},
-		{"relay", relayPair},
+		{"relay", relayPair(spliceOneWay)},
+		{"relay-pipelined", relayPair(splicePipelined)},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			ctx := b.Context()
@@ -206,7 +207,13 @@ func udpPair(tb testing.TB) (trsf.Transport, trsf.Transport) {
 // of goroutines that drives it (transport/udp.go): that sharing is part of
 // what is being measured, so splitting the legs across two endpoints here
 // would measure a topology nobody runs.
-func relayPair(tb testing.TB) (trsf.Transport, trsf.Transport) {
+func relayPair(splice func(context.Context, trsf.ReceiveStream, trsf.SendStream)) func(testing.TB) (trsf.Transport, trsf.Transport) {
+	return func(tb testing.TB) (trsf.Transport, trsf.Transport) {
+		return newRelayPair(tb, splice)
+	}
+}
+
+func newRelayPair(tb testing.TB, splice func(context.Context, trsf.ReceiveStream, trsf.SendStream)) (trsf.Transport, trsf.Transport) {
 	ctx := tb.Context()
 	log := slog.New(slog.DiscardHandler)
 
@@ -233,7 +240,7 @@ func relayPair(tb testing.TB) (trsf.Transport, trsf.Transport) {
 		if out == nil {
 			return
 		}
-		spliceOneWay(ctx, in, out)
+		splice(ctx, in, out)
 	}()
 	return source, sink
 }
@@ -256,6 +263,49 @@ func spliceOneWay(ctx context.Context, src trsf.ReceiveStream, dst trsf.SendStre
 			}
 		}
 		if eof {
+			return
+		}
+	}
+}
+
+// splicePipelined is spliceOneWay with the read and the write decoupled by a
+// bounded queue, so the two legs can be busy at once.
+//
+// **It is 17.1% SLOWER than the alternating version** (29.1 -> 24.1 MB/s over
+// 8 runs each, resolving ±11%), and it is kept as the standing evidence for
+// that. Decoupling a relay's two legs is an obvious-looking idea that gets
+// proposed from the shape of the code — the alternation is real, and the
+// legs really never overlap — but the alternation is not what the relay rung
+// costs. A relay does the work twice, receive and decrypt then encrypt and
+// send, both through the one endpoint's single sender and reader; the
+// overlap this buys is worth less than the extra handoff and queue it costs.
+// Anything aimed at the relay's ~2.5x has to beat 29.1, not 24.1.
+func splicePipelined(ctx context.Context, src trsf.ReceiveStream, dst trsf.SendStream) {
+	// Depth 8, so the reader can run ahead by half a megabyte at 64 KB a
+	// chunk without becoming an unbounded buffer in front of the send
+	// stream's own 1 MB limit.
+	queue := make(chan []byte, 8)
+	go func() {
+		defer close(queue)
+		for {
+			data, eof, err := src.ReadDirectContext(ctx, relayChunk)
+			if err != nil {
+				return
+			}
+			if len(data) > 0 {
+				select {
+				case queue <- data:
+				case <-ctx.Done():
+					return
+				}
+			}
+			if eof {
+				return
+			}
+		}
+	}()
+	for data := range queue {
+		if err := dst.AppendDataContext(ctx, false, data); err != nil {
 			return
 		}
 	}
