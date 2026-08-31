@@ -59,13 +59,28 @@ func (c *messageChannel) CloseChannel() {
 
 var ErrChannelClosed = errors.New("message channel closed")
 
+// popFromReorderBuf takes the next message in sequence out of the reorder
+// buffer, if it is there.
+//
+// Indexed, not `for i, msg := range`. Returning `&msg.msg` from a range loop
+// makes the loop variable escape, so the copy is heap-allocated on EVERY
+// iteration and all but the matching one is thrown away immediately. That was
+// 44% of all allocations on a bulk transfer -- about 94 per received packet,
+// of which one was the message actually delivered -- because the buffer runs
+// deep: a message that had to take SendMessage's goroutine path holds up
+// every message behind it, and they pile up here waiting for it.
+//
+// The scan and the removal are still O(n) each, so this stays O(n^2) over a
+// deep buffer. Only the allocation is fixed here; measure before assuming the
+// scan itself is worth restructuring.
 func (c *messageChannel) popFromReorderBuf() (*Message, bool) {
-	for i, msg := range c.reorderBuf {
-		if msg.seqNum == c.recvSeqNum {
+	for i := range c.reorderBuf {
+		if c.reorderBuf[i].seqNum == c.recvSeqNum {
+			msg := c.reorderBuf[i].msg // the one copy that is kept
 			// Remove from buffer
 			c.reorderBuf = append(c.reorderBuf[:i], c.reorderBuf[i+1:]...)
 			c.recvSeqNum++
-			return &msg.msg, true
+			return &msg, true
 		}
 	}
 	return nil, false
