@@ -371,10 +371,33 @@ func TestCancel(t *testing.T) {
 		t.Fatalf("expect to read data before cancel, got error: %v", err)
 	}
 	recvStream.Cancel()
-	time.Sleep(500 * time.Millisecond)
-	_, err = recvStream.Read(buf)
-	if err != io.EOF {
-		t.Fatalf("expected EOF after cancel, got: %v", err)
+	// Poll for the end of the stream instead of asserting that one read,
+	// 500 ms after the cancel, is it. Two transients sit in front of io.EOF
+	// and the original single read hit them about one run in three under
+	// -race:
+	//
+	//   - context.Canceled, while the queue is empty and the peer's EOF has
+	//     not arrived yet (recv_stream.go returns it rather than blocking
+	//     once a cancel has been sent);
+	//   - (n > 0, nil), when a chunk was already in flight when the cancel
+	//     went out. That chunk carries the EOF flag, and OrderingQueue.Read
+	//     takes the io.Reader convention for that case: the bytes now, the
+	//     io.EOF on the next call. The leftover was one 9-byte "More data".
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		n, readErr := recvStream.Read(buf)
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil && readErr != context.Canceled {
+			t.Fatalf("expected data, context.Canceled or EOF after cancel, got: %v", readErr)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("receive stream never reported EOF after cancel (last read: n=%d err=%v)", n, readErr)
+		}
+		if n == 0 {
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 	_, err = sendStream.Write([]byte("Data after cancel"))
 	if err != io.EOF {

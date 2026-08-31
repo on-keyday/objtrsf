@@ -16,13 +16,13 @@ type RecvRange struct {
 const InitialFlowWindow = 16 * 1024 * 1024 // 16MB
 
 type recvStream struct {
-	m             sync.Mutex
-	id            StreamID
-	logger        *slog.Logger
-	oq            *OrderingQueue
-	updateWindow  *withTriggerQueue[recvStream] // shared with conn
-	cancelStream  *withTriggerQueue[recvStream] // shared with conn
-	cancelSent    bool
+	m            sync.Mutex
+	id           StreamID
+	logger       *slog.Logger
+	oq           *OrderingQueue
+	updateWindow *withTriggerQueue[recvStream] // shared with conn
+	cancelStream *withTriggerQueue[recvStream] // shared with conn
+	cancelSent   bool
 	// removalScheduled dedups scheduleRecvStreamRemoval: the removal timer is
 	// armed once per stream even if the trigger repeats (duplicate EOF frames,
 	// cancel retransmits).
@@ -106,7 +106,11 @@ func (r *recvStream) Cancel() {
 	if r.cancelSent {
 		return
 	}
-	// clear oq
+	// The ordering queue is deliberately NOT cleared. Whatever the peer had
+	// already put on the wire still arrives and is still delivered; the
+	// reader sees the queued bytes first and the end of the stream after
+	// them. conn.go re-sends the cancel until this stream reports EOF, which
+	// OrderingQueue only sets once a read has consumed through the EOF chunk.
 	r.cancelStream.Push(r)
 	r.cancelSent = true
 	r.oq.Notify()
