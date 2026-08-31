@@ -420,3 +420,42 @@ func freeUDPPorts(tb testing.TB, n int) []uint16 {
 	}
 	return ports
 }
+
+// TestUDPPacketOccupancy reports how full the packets on the UDP path
+// actually are — payload bytes moved, divided by packets the sender put on
+// the wire.
+//
+// It exists because the two remaining levers on this transport are bytes per
+// packet and work per byte, and every arithmetic estimate of either one has
+// to assume an answer to this. It is a count, not a rate, so unlike the
+// throughput rungs it is unaffected by what else the machine is doing.
+func TestUDPPacketOccupancy(t *testing.T) {
+	ctx := t.Context()
+	log := slog.New(slog.DiscardHandler)
+
+	sinkPort := freeUDPPorts(t, 1)[0]
+	sourceEP := udpEndpoint(t, 0, log)
+	sinkEP := udpEndpoint(t, sinkPort, log)
+	sourceConn, sinkConn := udpConnPair(t, ctx, sourceEP, sinkEP, sinkPort)
+	source := trsfOver(ctx, false, sourceConn, log)
+	sink := trsfOver(ctx, true, sinkConn, log)
+	send, recv := connectedStream(t, ctx, source, sink)
+
+	const size = 8 << 20
+	// ConsumePacketNumber both reads and advances, so each of these two calls
+	// burns a number of its own; the pair of them costs 2.
+	before := sourceConn.ConsumePacketNumber()
+	if err := bulkTransfer(ctx, send, recv, size, relayChunk); err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+	after := sourceConn.ConsumePacketNumber()
+
+	packets := after - before - 1
+	if packets == 0 {
+		t.Fatal("sender consumed no packet numbers")
+	}
+	mtu := source.GetInternalState().CurrentMTU
+	perPacket := float64(size) / float64(packets)
+	t.Logf("%d payload bytes in %d packets = %.0f bytes/packet, at MTU %d (%.0f%% full)",
+		size, packets, perPacket, mtu, perPacket/float64(mtu)*100)
+}
