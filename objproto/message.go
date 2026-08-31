@@ -114,6 +114,19 @@ func (c *messageChannel) ReceiveMessageContext(ctx context.Context) (*Message, e
 	}
 }
 
+// SendMessage hands one received message to the reader without ever blocking
+// its caller. That "never blocks" is a hard requirement, not a preference:
+// the only caller is receiveApplication, which runs on the socket-reading
+// goroutine while holding both endpointLock.RLock and activeConn.mu — so a
+// blocked send here stalls every other connection on the endpoint.
+//
+// The channel is small, so a burst can fill it, and the fallback for that is
+// a goroutine per message. Trying the send first means that goroutine is paid
+// only when the reader is actually behind, instead of on every packet:
+// nothing about the caller's locks changes, and the burst case still cannot
+// block. Out-of-order arrival between the two paths is already handled — the
+// seqNum stamped below is what ReceiveMessage reorders on, and it is taken
+// before either path runs.
 func (c *messageChannel) SendMessage(msg Message) error {
 	c.cancelLock.RLock()
 	select {
@@ -125,6 +138,12 @@ func (c *messageChannel) SendMessage(msg Message) error {
 	c.senderWg.Add(1)
 	c.cancelLock.RUnlock()
 	seqNum := c.seqNum.Add(1) - 1
+	select {
+	case c.messageChan <- internalMessage{msg: msg, seqNum: seqNum}:
+		c.senderWg.Done()
+		return nil
+	default:
+	}
 	go func() {
 		defer c.senderWg.Done()
 		select {
