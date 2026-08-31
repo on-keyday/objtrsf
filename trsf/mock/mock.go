@@ -38,11 +38,11 @@ func (m *MockUnderlayingTransport) SendMessageWithPacketNumber(data []byte, pn o
 	return len(data), pn, nil
 }
 
-func SetupClientServer(t *testing.T) (trsf.Transport, trsf.Transport) {
+func SetupClientServer(t testing.TB) (trsf.Transport, trsf.Transport) {
 	return SetupClientServerEx(t, slog.LevelDebug)
 }
 
-func SetupClientServerEx(t *testing.T, logLevel slog.Level) (trsf.Transport, trsf.Transport) {
+func SetupClientServerEx(t testing.TB, logLevel slog.Level) (trsf.Transport, trsf.Transport) {
 	debugLogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})).With("test", t.Name())
 	ctx := t.Context()
 	client := trsf.NewStreams(ctx, false, 1200, 1500, &MockPacketNumberIssuer{}, debugLogger.With("role", "client"))
@@ -56,7 +56,7 @@ func SetupClientServerEx(t *testing.T, logLevel slog.Level) (trsf.Transport, trs
 	return client, server
 }
 
-func BackgroundIO(t *testing.T, peer1, peer2 trsf.Transport) {
+func BackgroundIO(t testing.TB, peer1, peer2 trsf.Transport) {
 	ctx := t.Context()
 	go func() {
 		for {
