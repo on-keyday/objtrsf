@@ -425,6 +425,17 @@ func (s *Streams) nextWakeDeadline() time.Time {
 }
 
 func (s *Streams) run(ctx context.Context) {
+	// One timer for the life of the loop. This used to be time.After inside
+	// the select below, which allocates a fresh timer on every iteration and
+	// never stops the ones another case wins -- 17.5% of the process's
+	// allocations on a bulk transfer, at roughly one loop iteration per
+	// packet. Reset is enough on its own here: since Go 1.23 a timer channel
+	// is unbuffered and Reset discards any value that was sent but not
+	// received, so an armed-but-unread timer from a previous iteration cannot
+	// leak into this one.
+	wake := time.NewTimer(time.Hour)
+	wake.Stop()
+	defer wake.Stop()
 	for {
 		s.loopIter.Add(1)
 		// Revive congestion-blocked streams now that cwnd has reopened. These
@@ -461,11 +472,11 @@ func (s *Streams) run(ctx context.Context) {
 				continue
 			}
 		} else {
-			timer := time.Until(deadline)
+			wake.Reset(time.Until(deadline))
 			select {
 			case <-ctx.Done():
 				return // end
-			case <-time.After(timer):
+			case <-wake.C:
 			case <-s.sendTrigger.Notification(): // when new data to send
 			case <-s.updateWindow.Notification(): // when new recv window to update
 			case <-s.cancelTrigger.Notification(): // when stream cancel is requested
