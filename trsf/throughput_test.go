@@ -39,10 +39,17 @@ import (
 //	BenchmarkThroughput/relay  the same again, but through a middle endpoint
 //	                           that splices two connections the way a server
 //	                           relaying between two peers does.
+//	BenchmarkThroughput/relay-setproxy
+//	                           the same topology, except the middle endpoint
+//	                           FORWARDS packets (objproto.SetProxy) instead of
+//	                           terminating them: one connection end-to-end, and
+//	                           a relay that holds no keys.
 //
 // mock/udp is what the packet layer costs. udp/relay is what relaying costs,
 // measured with the process boundary and the application removed, so it
-// cannot be confused with either.
+// cannot be confused with either. relay/relay-setproxy splits that further,
+// into the part a relay pays for being in the path at all and the part it
+// pays for terminating the crypto once it is there.
 //
 // A single run of any of these is not a result — that is the lesson the
 // spread above paid for. Establish a difference the way Go already knows how:
@@ -92,6 +99,7 @@ func BenchmarkThroughput(b *testing.B) {
 		{"mock", mockPair},
 		{"udp", udpPair},
 		{"relay", relayPair(spliceOneWay, false)},
+		{"relay-setproxy", proxyPair},
 		{"relay-pipelined", relayPair(splicePipelined, false)},
 		{"relay-2ep", relayPair(spliceOneWay, true)},
 	} {
@@ -338,6 +346,100 @@ func splicePipelined(ctx context.Context, src trsf.ReceiveStream, dst trsf.SendS
 			return
 		}
 	}
+}
+
+// --- rung 4: the same, forwarded through a relay that never decrypts ------
+
+// proxyPair puts a middle endpoint between the two ends that FORWARDS packets
+// rather than terminating them. SetProxy registers the setting under both
+// connection ids (objproto.go:474), so receive()'s proxy branch matches a
+// datagram from either side and sends it straight back out without ever
+// reaching decryption or an activeConnection. The ECDH therefore completes
+// end-to-end between source and sink, and the relay holds no keys.
+//
+// Against the relay rung, exactly one thing differs: whether the middle box
+// terminates the crypto or forwards the packet. Hop count is the same, the
+// relay still drives both directions through its single endpoint's one sender
+// and one reader goroutine, and the process layout is unchanged. What is
+// removed is AES-GCM twice, two of the four trsf stacks, the
+// ReadDirect/AppendData copy, and the alternation between the legs. So the gap
+// between the two rungs is the price of terminating in the middle, isolated
+// from the price of being in the path.
+//
+// It cannot reach the udp rung: the relay still receives and re-sends one
+// datagram per packet, and that is what being in the path costs.
+//
+// **Measured +80%,** 10 interleaved rounds on a quieted box (medians: mock
+// 193.6, udp 110.7, relay-setproxy 65.6, relay 36.4 MB/s), which recovers 39%
+// of the udp/relay gap and leaves 40% still owed to being in the path at all.
+// A first set taken while the box was busy AND block-ordered — the two things
+// the header warns about — put it at +92% with no rounds missing, so the
+// direction survives both methods and only the magnitude is soft. One round in
+// ten produced no relay-setproxy result and the reason was not captured; the
+// rung passed 6/6 when re-run alone, and the +92% set had no gaps, so the
+// exclusion is not what produces the difference.
+func proxyPair(tb testing.TB) (trsf.Transport, trsf.Transport) {
+	ctx := tb.Context()
+	log := slog.New(slog.DiscardHandler)
+
+	// The source gets a known port here, where the other rungs leave it
+	// ephemeral: receive() keys a packet by the address it came FROM
+	// (objproto.go, NewConnectionID(transport, from, ...)), so the proxy has to
+	// be told the source's own address, and UDPEndpoint does not report the
+	// port it bound. Binding it is bookkeeping, not a change to the path.
+	ports := freeUDPPorts(tb, 3)
+	sourcePort, relayPort, sinkPort := ports[0], ports[1], ports[2]
+	sourceEP := udpEndpoint(tb, sourcePort, log)
+	relayEP := udpEndpoint(tb, relayPort, log)
+	sinkEP := udpEndpoint(tb, sinkPort, log)
+
+	loopback := func(port uint16) netip.AddrPort {
+		return netip.AddrPortFrom(netip.AddrFrom4([4]byte{127, 0, 0, 1}), port)
+	}
+
+	// One connection id at three addresses. The proxy setting maps the two
+	// ENDS — keyed by where their packets come from — while the source dials
+	// the same id at the RELAY, which is the address it puts on the wire.
+	// Both ends end up believing their peer sits at the relay; only the relay
+	// knows otherwise. This is the shape runner/relay_handler.go builds from
+	// serverCID.Addr and the target's addr.
+	slot, err := objproto.NewRandomConnectionID("udp", loopback(relayPort))
+	if err != nil {
+		tb.Fatalf("slot id: %v", err)
+	}
+	owned := objproto.NewConnectionID("udp", loopback(sourcePort), slot.ID)
+	allocate := objproto.NewConnectionID("udp", loopback(sinkPort), slot.ID)
+	dialCID := objproto.NewConnectionID("udp", loopback(relayPort), slot.ID)
+	if err := relayEP.SetProxy(owned, allocate); err != nil {
+		tb.Fatalf("SetProxy(%v, %v): %v", owned, allocate, err)
+	}
+
+	// The dial has to run while the accept waits, for the reason udpConnPair
+	// gives: the accepted connection is produced by the exchange the dial is
+	// blocked on.
+	type result struct {
+		conn objproto.Connection
+		err  error
+	}
+	dial := make(chan result, 1)
+	go func() {
+		c, err := objproto.DoECDHHandshake(ctx, sourceEP, dialCID, ecdh.P521(), objproto.AES128GCM)
+		dial <- result{c, err}
+	}()
+	sinkConn, err := sinkEP.WaitNewActiveConnection(10 * time.Second)
+	if err != nil {
+		tb.Fatalf("accept behind the proxy: %v", err)
+	}
+	d := <-dial
+	if d.err != nil {
+		tb.Fatalf("dial through the proxy: %v", d.err)
+	}
+	tb.Cleanup(func() {
+		_ = d.conn.Close()
+		_ = sinkConn.Close()
+	})
+
+	return trsfOver(ctx, false, d.conn, log), trsfOver(ctx, true, sinkConn, log)
 }
 
 // --- wiring shared by the two socket-backed rungs ------------------------
