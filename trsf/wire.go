@@ -3,6 +3,7 @@ package trsf
 import (
 	"errors"
 	"slices"
+	"time"
 
 	"github.com/on-keyday/objtrsf/trsf/wire"
 )
@@ -26,7 +27,9 @@ func decodeRanges(end uint64, firstDelta uint64, ranges []wire.ACKRange) []Range
 	return result
 }
 
-func ParseTransferACK(pkt *wire.StreamACKPacket) (ranges []Range, err error) {
+// ParseTransferACK also returns the delay the peer reported holding the
+// largest acked packet for. Microseconds on the wire; a duration here.
+func ParseTransferACK(pkt *wire.StreamACKPacket) (ranges []Range, ackDelay time.Duration, err error) {
 	/*
 		rawMin, ok := obj[MaxAckedKey]
 		if !ok {
@@ -65,10 +68,14 @@ func ParseTransferACK(pkt *wire.StreamACKPacket) (ranges []Range, err error) {
 		}
 		id, _ = objproto.GetUint(obj, IDKey)
 	*/
-	return decodeRanges(pkt.LargestAck.Value(), pkt.FirstDelta.Value(), pkt.Ranges), nil
+	return decodeRanges(pkt.LargestAck.Value(), pkt.FirstDelta.Value(), pkt.Ranges),
+		time.Duration(pkt.AckDelay.Value()) * time.Microsecond, nil
 }
 
-func TransferACK(ranges []Range) (*wire.StreamACKPacket, error) {
+// TransferACK builds the ACK. ackDelay is how long this receiver has held the
+// largest packet it is acking; it goes on the wire in microseconds so the peer
+// can take its own scheduling out of the RTT sample (RFC 9002 5.3).
+func TransferACK(ranges []Range, ackDelay time.Duration) (*wire.StreamACKPacket, error) {
 	if len(ranges) == 0 {
 		return nil, errors.New("empty delta")
 	}
@@ -115,8 +122,16 @@ func TransferACK(ranges []Range) (*wire.StreamACKPacket, error) {
 	if !ok {
 		return nil, errors.New("invalid first delta")
 	}
+	if ackDelay < 0 {
+		ackDelay = 0
+	}
+	delayWire, ok := wire.EncodeVarint(uint64(ackDelay.Microseconds()))
+	if !ok {
+		return nil, errors.New("invalid ack delay")
+	}
 	return &wire.StreamACKPacket{
 		LargestAck: endWire,
+		AckDelay:   delayWire,
 		FirstDelta: firstDeltaWire,
 		Ranges:     wire_ranges,
 	}, nil

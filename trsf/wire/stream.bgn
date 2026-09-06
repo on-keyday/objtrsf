@@ -46,8 +46,21 @@ format ACKRange:
     delta :Varint
 
 
+# ack_delay is how long the RECEIVER held largest_ack before sending this ACK,
+# in microseconds. RFC 9002 5.3: the sender subtracts it from the RTT sample, so
+# a receiver that batches ACKs does not inflate the peer's smoothed_rtt with its
+# own scheduling. Without it, srtt is the path PLUS whatever the far side's run
+# loop was busy with, and every timer derived from srtt inherits that.
+#
+# min_rtt is deliberately NOT adjusted by it (RFC 9002 5.2), so min_rtt stays a
+# lower bound on the path itself and srtt - min_rtt stays readable as queueing.
+#
+# It is a LOWER BOUND: the clock starts when the receiver's run loop processes
+# the packet, so time the packet spent in the receive queue before that is not
+# counted, nor is the hop from building the ACK to the socket.
 format StreamACKPacket:
     largest_ack :Varint
+    ack_delay :Varint
     first_delta :Varint
     len :Varint 
     ranges :[len.value]ACKRange

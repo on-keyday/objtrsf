@@ -413,7 +413,10 @@ func (ah *SentPacketHandler) OnTimeout(now time.Time) (bool, error) {
 	return true, nil
 }
 
-func (ah *SentPacketHandler) ReceiveACK(rcvTime time.Time, r []Range) error {
+// ReceiveACK folds one ACK in. ackDelay is what the peer reported holding the
+// largest acked packet for; it reaches UpdateRTT and nothing else, because it
+// describes the MEASUREMENT and not the path.
+func (ah *SentPacketHandler) ReceiveACK(rcvTime time.Time, r []Range, ackDelay time.Duration) error {
 	ah.m.Lock()
 	defer ah.m.Unlock()
 	largest := r[len(r)-1].End - 1
@@ -433,7 +436,7 @@ func (ah *SentPacketHandler) ReceiveACK(rcvTime time.Time, r []Range) error {
 	}
 	// largest acked packet time update
 	if lastPacket := ackedPackets[len(ackedPackets)-1]; lastPacket.PacketNumber == objproto.PacketNumber(largest) {
-		ah.rtt.UpdateRTT(ah.logger, rcvTime.Sub(lastPacket.SentTime), rcvTime)
+		ah.rtt.UpdateRTT(ah.logger, rcvTime.Sub(lastPacket.SentTime), ackDelay, rcvTime)
 	}
 	ah.largestAcked = max(ah.largestAcked, largest)
 	ah.detectLost(rcvTime)

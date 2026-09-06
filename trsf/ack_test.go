@@ -2,6 +2,7 @@ package trsf
 
 import (
 	"testing"
+	"time"
 )
 
 func TestACKRange(t *testing.T) {
@@ -10,13 +11,20 @@ func TestACKRange(t *testing.T) {
 		{Begin: 20, End: 50},
 		{Begin: 60, End: 100},
 	}
-	obj, err := TransferACK(testTarget)
+	const held = 7500 * time.Microsecond
+	obj, err := TransferACK(testTarget, held)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ranges, err := ParseTransferACK(obj)
+	ranges, ackDelay, err := ParseTransferACK(obj)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The delay round-trips at microsecond resolution, which is what the wire
+	// carries: a sender that reads it back wrong would subtract the wrong
+	// amount from every RTT sample rather than failing visibly.
+	if ackDelay != held {
+		t.Errorf("ack_delay = %v, want %v", ackDelay, held)
 	}
 	if len(ranges) != len(testTarget) {
 		t.Fatalf("expected %d ranges, got %d", len(testTarget), len(ranges))

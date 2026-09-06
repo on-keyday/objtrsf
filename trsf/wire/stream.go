@@ -11,88 +11,88 @@ import (
 
 /* config.go.package("wire")*/
 func (v *Varint) Prefix() uint8 {
-	return uint8(((v.tmp235 >> uint64(62)) & uint64(3)))
+	return uint8(((v.tmp250 >> uint64(62)) & uint64(3)))
 }
 
-func (v *Varint) SetPrefix(tmp786 uint8) bool {
-	v.tmp235 = (v.tmp235 & (^(uint64(3) << uint64(62)))) | ((uint64(tmp786) & uint64(3)) << uint64(62))
+func (v *Varint) SetPrefix(tmp797 uint8) bool {
+	v.tmp250 = (v.tmp250 & (^(uint64(3) << uint64(62)))) | ((uint64(tmp797) & uint64(3)) << uint64(62))
 	return true
 }
 
-func (v *Varint) tmp775() uint64 {
-	return uint64(((v.tmp235 >> uint64(0)) & uint64(4611686018427387903)))
+func (v *Varint) tmp780() uint64 {
+	return uint64(((v.tmp250 >> uint64(0)) & uint64(4611686018427387903)))
 }
 
-func (v *Varint) settmp414(tmp779 uint64) bool {
-	v.tmp235 = (v.tmp235 & (^(uint64(4611686018427387903) << uint64(0)))) | ((uint64(tmp779) & uint64(4611686018427387903)) << uint64(0))
+func (v *Varint) settmp413(tmp778 uint64) bool {
+	v.tmp250 = (v.tmp250 & (^(uint64(4611686018427387903) << uint64(0)))) | ((uint64(tmp778) & uint64(4611686018427387903)) << uint64(0))
 	return true
 }
 
 type Varint struct {
-	tmp235 uint64
+	tmp250 uint64
 }
 
 func (v *Varint) Value() uint64 {
 	if v.Prefix() == uint8(0) {
-		return uint64(uint8(v.tmp775()))
+		return uint64(uint8(v.tmp780()))
 	} else if v.Prefix() == uint8(1) {
-		return uint64(uint16(v.tmp775()))
+		return uint64(uint16(v.tmp780()))
 	} else if v.Prefix() == 2 {
-		return uint64(uint32(v.tmp775()))
+		return uint64(uint32(v.tmp780()))
 	} else if v.Prefix() == 3 {
-		return uint64(uint64(v.tmp775()))
+		return uint64(uint64(v.tmp780()))
 	}
 	return uint64(0)
 }
-func (v *Varint) SetValue(tmp674 uint64) bool {
+func (v *Varint) SetValue(tmp694 uint64) bool {
 	if v.Prefix() == uint8(0) {
-		v.settmp414(uint64(uint8(tmp674)))
+		v.settmp413(uint64(uint8(tmp694)))
 		return true
 	} else if v.Prefix() == uint8(1) {
-		v.settmp414(uint64(uint16(tmp674)))
+		v.settmp413(uint64(uint16(tmp694)))
 		return true
 	} else if v.Prefix() == 2 {
-		v.settmp414(uint64(uint32(tmp674)))
+		v.settmp413(uint64(uint32(tmp694)))
 		return true
 	} else if v.Prefix() == 3 {
-		v.settmp414(uint64(uint64(tmp674)))
+		v.settmp413(uint64(uint64(tmp694)))
 		return true
 	}
 	return false
 }
 
-func (v *Varint) Write(tmp77 io.Writer) error {
-	tmp716 := [8]uint8{}
-	tmp716[0] = uint8((v.Prefix() & 3)) << uint8(6)
+func (v *Varint) Write(tmp41 io.Writer) error {
+	tmp626 := [8]uint8{}
+	tmp626[0] = uint8((v.Prefix() & 3)) << uint8(6)
 	if v.Prefix() == uint8(0) {
-		tmp716[0] = tmp716[0] | uint8((uint8(v.tmp775()) & 63))
-		if _, err := tmp77.Write(tmp716[:1]); err != nil {
+		tmp626[0] = tmp626[0] | uint8((uint8(v.tmp780()) & 63))
+		if _, err := tmp41.Write(tmp626[:1]); err != nil {
 			return err
 		}
 	} else if v.Prefix() == uint8(1) {
-		tmp716[0] = tmp716[0] | uint8(((uint16(v.tmp775()) >> uint16(8)) & uint16(63)))
-		tmp716[1] = uint8((uint16(v.tmp775()) & uint16(255)))
-		if _, err := tmp77.Write(tmp716[:2]); err != nil {
+		tmp626[0] = tmp626[0] | uint8(((uint16(v.tmp780()) >> uint16(8)) & uint16(63)))
+		tmp626[1] = uint8((uint16(v.tmp780()) & uint16(255)))
+		if _, err := tmp41.Write(tmp626[:2]); err != nil {
 			return err
 		}
 	} else if v.Prefix() == 2 {
-		tmp716[0] = tmp716[0] | uint8(((uint32(v.tmp775()) >> uint32(24)) & uint32(63)))
-		tmp716[1] = uint8(((uint32(v.tmp775()) >> uint32(16)) & uint32(255)))
-		tmp716[2] = uint8(((uint32(v.tmp775()) >> uint32(8)) & uint32(255)))
-		tmp716[3] = uint8((uint32(v.tmp775()) & uint32(255)))
-		if _, err := tmp77.Write(tmp716[:4]); err != nil {
+		tmp626[0] = tmp626[0] | uint8(((uint32(v.tmp780()) >> uint32(24)) & uint32(63)))
+		tmp626[1] = uint8(((uint32(v.tmp780()) >> uint32(16)) & uint32(255)))
+		tmp626[2] = uint8(((uint32(v.tmp780()) >> uint32(8)) & uint32(255)))
+		tmp626[3] = uint8((uint32(v.tmp780()) & uint32(255)))
+		if _, err := tmp41.Write(tmp626[:4]); err != nil {
 			return err
 		}
 	} else if v.Prefix() == 3 {
-		tmp716[0] = tmp716[0] | uint8(((uint64(v.tmp775()) >> uint64(56)) & uint64(63)))
-		tmp716[1] = uint8(((uint64(v.tmp775()) >> uint64(48)) & uint64(255)))
-		tmp716[2] = uint8(((uint64(v.tmp775()) >> uint64(40)) & uint64(255)))
-		tmp716[3] = uint8(((uint64(v.tmp775()) >> uint64(32)) & uint64(255)))
-		tmp716[4] = uint8(((uint64(v.tmp775()) >> uint64(24)) & uint64(255)))
-		tmp716[5] = uint8(((uint64(v.tmp775()) >> uint64(16)) & uint64(255)))
-		tmp716[6] = uint8(((uint64(v.tmp775()) >> uint64(8)) & uint64(255)))
-		tmp716[7] = uint8((uint64(v.tmp775()) & uint64(255)))
-		if _, err := tmp77.Write(tmp716[:8]); err != nil {
+		tmp626[0] = tmp626[0] | uint8(((uint64(v.tmp780()) >> uint64(56)) & uint64(63)))
+		tmp626[1] = uint8(((uint64(v.tmp780()) >> uint64(48)) & uint64(255)))
+		tmp626[2] = uint8(((uint64(v.tmp780()) >> uint64(40)) & uint64(255)))
+		tmp626[3] = uint8(((uint64(v.tmp780()) >> uint64(32)) & uint64(255)))
+		tmp626[4] = uint8(((uint64(v.tmp780()) >> uint64(24)) & uint64(255)))
+		tmp626[5] = uint8(((uint64(v.tmp780()) >> uint64(16)) & uint64(255)))
+		tmp626[6] = uint8(((uint64(v.tmp780()) >> uint64(8)) & uint64(255)))
+		tmp626[7] = uint8((uint64(v.tmp780()) & uint64(255)))
+		if _, err := tmp41.Write(tmp626[:8]); err != nil {
 			return err
 		}
 	}
@@ -113,52 +113,52 @@ func (s *Varint) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (v *Varint) EncodeSlice(tmp77 []byte, tmp77Offset *int) error {
-	tmp716 := []uint8{}
-	if len(tmp77)-*tmp77Offset < int(1) {
-		return errors.New("not enough space to reserve data for field \"Varint::tmp404::Value\"")
+func (v *Varint) EncodeSlice(tmp41 []byte, tmp41Offset *int) error {
+	tmp626 := []uint8{}
+	if len(tmp41)-*tmp41Offset < int(1) {
+		return errors.New("not enough space to reserve data for field \"Varint::tmp407::Value\"")
 	}
-	tmp716 = tmp77[*tmp77Offset : *tmp77Offset+int(1)]
-	tmp716[0] = uint8((v.Prefix() & 3)) << uint8(6)
+	tmp626 = tmp41[*tmp41Offset : *tmp41Offset+int(1)]
+	tmp626[0] = uint8((v.Prefix() & 3)) << uint8(6)
 	if v.Prefix() == uint8(0) {
-		if len(tmp77)-*tmp77Offset < int(1) {
-			return errors.New("not enough space to reserve data for field \"Varint::tmp404::Value\"")
+		if len(tmp41)-*tmp41Offset < int(1) {
+			return errors.New("not enough space to reserve data for field \"Varint::tmp407::Value\"")
 		}
-		tmp716 = tmp77[*tmp77Offset : *tmp77Offset+int(1)]
-		tmp716[0] = tmp716[0] | uint8((uint8(v.tmp775()) & 63))
-		*tmp77Offset += int(1)
+		tmp626 = tmp41[*tmp41Offset : *tmp41Offset+int(1)]
+		tmp626[0] = tmp626[0] | uint8((uint8(v.tmp780()) & 63))
+		*tmp41Offset += int(1)
 	} else if v.Prefix() == uint8(1) {
-		if len(tmp77)-*tmp77Offset < int(2) {
-			return errors.New("not enough space to reserve data for field \"Varint::tmp404::Value\"")
+		if len(tmp41)-*tmp41Offset < int(2) {
+			return errors.New("not enough space to reserve data for field \"Varint::tmp407::Value\"")
 		}
-		tmp716 = tmp77[*tmp77Offset : *tmp77Offset+int(2)]
-		tmp716[0] = tmp716[0] | uint8(((uint16(v.tmp775()) >> uint16(8)) & uint16(63)))
-		tmp716[1] = uint8((uint16(v.tmp775()) & uint16(255)))
-		*tmp77Offset += int(2)
+		tmp626 = tmp41[*tmp41Offset : *tmp41Offset+int(2)]
+		tmp626[0] = tmp626[0] | uint8(((uint16(v.tmp780()) >> uint16(8)) & uint16(63)))
+		tmp626[1] = uint8((uint16(v.tmp780()) & uint16(255)))
+		*tmp41Offset += int(2)
 	} else if v.Prefix() == 2 {
-		if len(tmp77)-*tmp77Offset < int(4) {
-			return errors.New("not enough space to reserve data for field \"Varint::tmp404::Value\"")
+		if len(tmp41)-*tmp41Offset < int(4) {
+			return errors.New("not enough space to reserve data for field \"Varint::tmp407::Value\"")
 		}
-		tmp716 = tmp77[*tmp77Offset : *tmp77Offset+int(4)]
-		tmp716[0] = tmp716[0] | uint8(((uint32(v.tmp775()) >> uint32(24)) & uint32(63)))
-		tmp716[1] = uint8(((uint32(v.tmp775()) >> uint32(16)) & uint32(255)))
-		tmp716[2] = uint8(((uint32(v.tmp775()) >> uint32(8)) & uint32(255)))
-		tmp716[3] = uint8((uint32(v.tmp775()) & uint32(255)))
-		*tmp77Offset += int(4)
+		tmp626 = tmp41[*tmp41Offset : *tmp41Offset+int(4)]
+		tmp626[0] = tmp626[0] | uint8(((uint32(v.tmp780()) >> uint32(24)) & uint32(63)))
+		tmp626[1] = uint8(((uint32(v.tmp780()) >> uint32(16)) & uint32(255)))
+		tmp626[2] = uint8(((uint32(v.tmp780()) >> uint32(8)) & uint32(255)))
+		tmp626[3] = uint8((uint32(v.tmp780()) & uint32(255)))
+		*tmp41Offset += int(4)
 	} else if v.Prefix() == 3 {
-		if len(tmp77)-*tmp77Offset < int(8) {
-			return errors.New("not enough space to reserve data for field \"Varint::tmp404::Value\"")
+		if len(tmp41)-*tmp41Offset < int(8) {
+			return errors.New("not enough space to reserve data for field \"Varint::tmp407::Value\"")
 		}
-		tmp716 = tmp77[*tmp77Offset : *tmp77Offset+int(8)]
-		tmp716[0] = tmp716[0] | uint8(((uint64(v.tmp775()) >> uint64(56)) & uint64(63)))
-		tmp716[1] = uint8(((uint64(v.tmp775()) >> uint64(48)) & uint64(255)))
-		tmp716[2] = uint8(((uint64(v.tmp775()) >> uint64(40)) & uint64(255)))
-		tmp716[3] = uint8(((uint64(v.tmp775()) >> uint64(32)) & uint64(255)))
-		tmp716[4] = uint8(((uint64(v.tmp775()) >> uint64(24)) & uint64(255)))
-		tmp716[5] = uint8(((uint64(v.tmp775()) >> uint64(16)) & uint64(255)))
-		tmp716[6] = uint8(((uint64(v.tmp775()) >> uint64(8)) & uint64(255)))
-		tmp716[7] = uint8((uint64(v.tmp775()) & uint64(255)))
-		*tmp77Offset += int(8)
+		tmp626 = tmp41[*tmp41Offset : *tmp41Offset+int(8)]
+		tmp626[0] = tmp626[0] | uint8(((uint64(v.tmp780()) >> uint64(56)) & uint64(63)))
+		tmp626[1] = uint8(((uint64(v.tmp780()) >> uint64(48)) & uint64(255)))
+		tmp626[2] = uint8(((uint64(v.tmp780()) >> uint64(40)) & uint64(255)))
+		tmp626[3] = uint8(((uint64(v.tmp780()) >> uint64(32)) & uint64(255)))
+		tmp626[4] = uint8(((uint64(v.tmp780()) >> uint64(24)) & uint64(255)))
+		tmp626[5] = uint8(((uint64(v.tmp780()) >> uint64(16)) & uint64(255)))
+		tmp626[6] = uint8(((uint64(v.tmp780()) >> uint64(8)) & uint64(255)))
+		tmp626[7] = uint8((uint64(v.tmp780()) & uint64(255)))
+		*tmp41Offset += int(8)
 	}
 	return nil
 }
@@ -177,34 +177,34 @@ func (s *Varint) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (v *Varint) Append(tmp77 []byte) ([]byte, error) {
-	tmp716 := [8]uint8{}
-	tmp716[0] = uint8((v.Prefix() & 3)) << uint8(6)
+func (v *Varint) Append(tmp41 []byte) ([]byte, error) {
+	tmp626 := [8]uint8{}
+	tmp626[0] = uint8((v.Prefix() & 3)) << uint8(6)
 	if v.Prefix() == uint8(0) {
-		tmp716[0] = tmp716[0] | uint8((uint8(v.tmp775()) & 63))
-		tmp77 = append(tmp77, tmp716[:1]...)
+		tmp626[0] = tmp626[0] | uint8((uint8(v.tmp780()) & 63))
+		tmp41 = append(tmp41, tmp626[:1]...)
 	} else if v.Prefix() == uint8(1) {
-		tmp716[0] = tmp716[0] | uint8(((uint16(v.tmp775()) >> uint16(8)) & uint16(63)))
-		tmp716[1] = uint8((uint16(v.tmp775()) & uint16(255)))
-		tmp77 = append(tmp77, tmp716[:2]...)
+		tmp626[0] = tmp626[0] | uint8(((uint16(v.tmp780()) >> uint16(8)) & uint16(63)))
+		tmp626[1] = uint8((uint16(v.tmp780()) & uint16(255)))
+		tmp41 = append(tmp41, tmp626[:2]...)
 	} else if v.Prefix() == 2 {
-		tmp716[0] = tmp716[0] | uint8(((uint32(v.tmp775()) >> uint32(24)) & uint32(63)))
-		tmp716[1] = uint8(((uint32(v.tmp775()) >> uint32(16)) & uint32(255)))
-		tmp716[2] = uint8(((uint32(v.tmp775()) >> uint32(8)) & uint32(255)))
-		tmp716[3] = uint8((uint32(v.tmp775()) & uint32(255)))
-		tmp77 = append(tmp77, tmp716[:4]...)
+		tmp626[0] = tmp626[0] | uint8(((uint32(v.tmp780()) >> uint32(24)) & uint32(63)))
+		tmp626[1] = uint8(((uint32(v.tmp780()) >> uint32(16)) & uint32(255)))
+		tmp626[2] = uint8(((uint32(v.tmp780()) >> uint32(8)) & uint32(255)))
+		tmp626[3] = uint8((uint32(v.tmp780()) & uint32(255)))
+		tmp41 = append(tmp41, tmp626[:4]...)
 	} else if v.Prefix() == 3 {
-		tmp716[0] = tmp716[0] | uint8(((uint64(v.tmp775()) >> uint64(56)) & uint64(63)))
-		tmp716[1] = uint8(((uint64(v.tmp775()) >> uint64(48)) & uint64(255)))
-		tmp716[2] = uint8(((uint64(v.tmp775()) >> uint64(40)) & uint64(255)))
-		tmp716[3] = uint8(((uint64(v.tmp775()) >> uint64(32)) & uint64(255)))
-		tmp716[4] = uint8(((uint64(v.tmp775()) >> uint64(24)) & uint64(255)))
-		tmp716[5] = uint8(((uint64(v.tmp775()) >> uint64(16)) & uint64(255)))
-		tmp716[6] = uint8(((uint64(v.tmp775()) >> uint64(8)) & uint64(255)))
-		tmp716[7] = uint8((uint64(v.tmp775()) & uint64(255)))
-		tmp77 = append(tmp77, tmp716[:8]...)
+		tmp626[0] = tmp626[0] | uint8(((uint64(v.tmp780()) >> uint64(56)) & uint64(63)))
+		tmp626[1] = uint8(((uint64(v.tmp780()) >> uint64(48)) & uint64(255)))
+		tmp626[2] = uint8(((uint64(v.tmp780()) >> uint64(40)) & uint64(255)))
+		tmp626[3] = uint8(((uint64(v.tmp780()) >> uint64(32)) & uint64(255)))
+		tmp626[4] = uint8(((uint64(v.tmp780()) >> uint64(24)) & uint64(255)))
+		tmp626[5] = uint8(((uint64(v.tmp780()) >> uint64(16)) & uint64(255)))
+		tmp626[6] = uint8(((uint64(v.tmp780()) >> uint64(8)) & uint64(255)))
+		tmp626[7] = uint8((uint64(v.tmp780()) & uint64(255)))
+		tmp41 = append(tmp41, tmp626[:8]...)
 	}
-	return tmp77, nil
+	return tmp41, nil
 }
 func (s *Varint) MustAppend(buf []byte) []byte {
 	var err error
@@ -215,39 +215,39 @@ func (s *Varint) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (v *Varint) Read(tmp15 io.Reader) error {
-	tmp792 := [8]uint8{}
-	tmp768 := uint8(0)
-	if _, err := io.ReadFull(tmp15, tmp792[0:0+1]); err != nil {
+func (v *Varint) Read(tmp14 io.Reader) error {
+	tmp805 := [8]uint8{}
+	tmp793 := uint8(0)
+	if _, err := io.ReadFull(tmp14, tmp805[0:0+1]); err != nil {
 		return err
 	}
-	tmp768 = uint8(((tmp792[0] & 192) >> uint8(6)))
-	v.SetPrefix(tmp768)
+	tmp793 = uint8(((tmp805[0] & 192) >> uint8(6)))
+	v.SetPrefix(tmp793)
 	if v.Prefix() == uint8(0) {
-		tmp765 := uint8(0)
-		tmp765 = uint8((tmp792[0] & uint8(63)))
-		v.settmp414(uint64(tmp765))
+		tmp777 := uint8(0)
+		tmp777 = uint8((tmp805[0] & uint8(63)))
+		v.settmp413(uint64(tmp777))
 	} else if v.Prefix() == uint8(1) {
-		tmp751 := uint16(0)
-		if _, err := io.ReadFull(tmp15, tmp792[1:1+1]); err != nil {
+		tmp803 := uint16(0)
+		if _, err := io.ReadFull(tmp14, tmp805[1:1+1]); err != nil {
 			return err
 		}
-		tmp751 = (uint16((tmp792[0] & uint8(63))) << uint16(8)) | uint16(tmp792[1])
-		v.settmp414(uint64(tmp751))
+		tmp803 = (uint16((tmp805[0] & uint8(63))) << uint16(8)) | uint16(tmp805[1])
+		v.settmp413(uint64(tmp803))
 	} else if v.Prefix() == 2 {
-		tmp744 := uint32(0)
-		if _, err := io.ReadFull(tmp15, tmp792[1:1+3]); err != nil {
+		tmp754 := uint32(0)
+		if _, err := io.ReadFull(tmp14, tmp805[1:1+3]); err != nil {
 			return err
 		}
-		tmp744 = (((uint32((tmp792[0] & uint8(63))) << uint32(24)) | (uint32(tmp792[1]) << uint32(16))) | (uint32(tmp792[2]) << uint32(8))) | uint32(tmp792[3])
-		v.settmp414(uint64(tmp744))
+		tmp754 = (((uint32((tmp805[0] & uint8(63))) << uint32(24)) | (uint32(tmp805[1]) << uint32(16))) | (uint32(tmp805[2]) << uint32(8))) | uint32(tmp805[3])
+		v.settmp413(uint64(tmp754))
 	} else if v.Prefix() == 3 {
-		tmp747 := uint64(0)
-		if _, err := io.ReadFull(tmp15, tmp792[1:1+7]); err != nil {
+		tmp735 := uint64(0)
+		if _, err := io.ReadFull(tmp14, tmp805[1:1+7]); err != nil {
 			return err
 		}
-		tmp747 = (((((((uint64((tmp792[0] & uint8(63))) << uint64(56)) | (uint64(tmp792[1]) << uint64(48))) | (uint64(tmp792[2]) << uint64(40))) | (uint64(tmp792[3]) << uint64(32))) | (uint64(tmp792[4]) << uint64(24))) | (uint64(tmp792[5]) << uint64(16))) | (uint64(tmp792[6]) << uint64(8))) | uint64(tmp792[7])
-		v.settmp414(uint64(tmp747))
+		tmp735 = (((((((uint64((tmp805[0] & uint8(63))) << uint64(56)) | (uint64(tmp805[1]) << uint64(48))) | (uint64(tmp805[2]) << uint64(40))) | (uint64(tmp805[3]) << uint64(32))) | (uint64(tmp805[4]) << uint64(24))) | (uint64(tmp805[5]) << uint64(16))) | (uint64(tmp805[6]) << uint64(8))) | uint64(tmp805[7])
+		v.settmp413(uint64(tmp735))
 	}
 	return nil
 }
@@ -269,47 +269,47 @@ func (s *Varint) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (v *Varint) DecodeSlice(tmp15 []byte, tmp15Offset *int) error {
-	tmp792 := []uint8{}
-	tmp768 := uint8(0)
-	if len(tmp15)-*tmp15Offset < 1 {
+func (v *Varint) DecodeSlice(tmp14 []byte, tmp14Offset *int) error {
+	tmp805 := []uint8{}
+	tmp793 := uint8(0)
+	if len(tmp14)-*tmp14Offset < 1 {
 		return errors.New("not enough data to read for field \"Varint::Prefix\"")
 	}
-	tmp792 = tmp15[*tmp15Offset : *tmp15Offset+1]
-	*tmp15Offset += int(1)
-	tmp768 = uint8(((tmp792[0] & 192) >> uint8(6)))
-	v.SetPrefix(tmp768)
+	tmp805 = tmp14[*tmp14Offset : *tmp14Offset+1]
+	*tmp14Offset += int(1)
+	tmp793 = uint8(((tmp805[0] & 192) >> uint8(6)))
+	v.SetPrefix(tmp793)
 	if v.Prefix() == uint8(0) {
-		tmp765 := uint8(0)
-		tmp765 = uint8((tmp792[0] & uint8(63)))
-		v.settmp414(uint64(tmp765))
+		tmp777 := uint8(0)
+		tmp777 = uint8((tmp805[0] & uint8(63)))
+		v.settmp413(uint64(tmp777))
 	} else if v.Prefix() == uint8(1) {
-		tmp751 := uint16(0)
-		if len(tmp15)-*tmp15Offset < 1 {
-			return errors.New("not enough data to read for field \"Varint::tmp404::Value\"")
+		tmp803 := uint16(0)
+		if len(tmp14)-*tmp14Offset < 1 {
+			return errors.New("not enough data to read for field \"Varint::tmp407::Value\"")
 		}
-		tmp792 = tmp792[:1+1]
-		*tmp15Offset += int(1)
-		tmp751 = (uint16((tmp792[0] & uint8(63))) << uint16(8)) | uint16(tmp792[1])
-		v.settmp414(uint64(tmp751))
+		tmp805 = tmp805[:1+1]
+		*tmp14Offset += int(1)
+		tmp803 = (uint16((tmp805[0] & uint8(63))) << uint16(8)) | uint16(tmp805[1])
+		v.settmp413(uint64(tmp803))
 	} else if v.Prefix() == 2 {
-		tmp744 := uint32(0)
-		if len(tmp15)-*tmp15Offset < 3 {
-			return errors.New("not enough data to read for field \"Varint::tmp404::Value\"")
+		tmp754 := uint32(0)
+		if len(tmp14)-*tmp14Offset < 3 {
+			return errors.New("not enough data to read for field \"Varint::tmp407::Value\"")
 		}
-		tmp792 = tmp792[:1+3]
-		*tmp15Offset += int(3)
-		tmp744 = (((uint32((tmp792[0] & uint8(63))) << uint32(24)) | (uint32(tmp792[1]) << uint32(16))) | (uint32(tmp792[2]) << uint32(8))) | uint32(tmp792[3])
-		v.settmp414(uint64(tmp744))
+		tmp805 = tmp805[:1+3]
+		*tmp14Offset += int(3)
+		tmp754 = (((uint32((tmp805[0] & uint8(63))) << uint32(24)) | (uint32(tmp805[1]) << uint32(16))) | (uint32(tmp805[2]) << uint32(8))) | uint32(tmp805[3])
+		v.settmp413(uint64(tmp754))
 	} else if v.Prefix() == 3 {
-		tmp747 := uint64(0)
-		if len(tmp15)-*tmp15Offset < 7 {
-			return errors.New("not enough data to read for field \"Varint::tmp404::Value\"")
+		tmp735 := uint64(0)
+		if len(tmp14)-*tmp14Offset < 7 {
+			return errors.New("not enough data to read for field \"Varint::tmp407::Value\"")
 		}
-		tmp792 = tmp792[:1+7]
-		*tmp15Offset += int(7)
-		tmp747 = (((((((uint64((tmp792[0] & uint8(63))) << uint64(56)) | (uint64(tmp792[1]) << uint64(48))) | (uint64(tmp792[2]) << uint64(40))) | (uint64(tmp792[3]) << uint64(32))) | (uint64(tmp792[4]) << uint64(24))) | (uint64(tmp792[5]) << uint64(16))) | (uint64(tmp792[6]) << uint64(8))) | uint64(tmp792[7])
-		v.settmp414(uint64(tmp747))
+		tmp805 = tmp805[:1+7]
+		*tmp14Offset += int(7)
+		tmp735 = (((((((uint64((tmp805[0] & uint8(63))) << uint64(56)) | (uint64(tmp805[1]) << uint64(48))) | (uint64(tmp805[2]) << uint64(40))) | (uint64(tmp805[3]) << uint64(32))) | (uint64(tmp805[4]) << uint64(24))) | (uint64(tmp805[5]) << uint64(16))) | (uint64(tmp805[6]) << uint64(8))) | uint64(tmp805[7])
+		v.settmp413(uint64(tmp735))
 	}
 	return nil
 }
@@ -333,42 +333,42 @@ func (s *Varint) DecodeExact(buf []byte) error {
 }
 
 func VarintLen(Value uint64) uint8 {
-	tmp89 := uint8(0)
+	tmp88 := uint8(0)
 	if (uint64(0) <= Value) && (Value <= 63) {
-		tmp89 = 1
+		tmp88 = 1
 	} else if (uint64(64) <= Value) && (Value <= 16383) {
-		tmp89 = 2
+		tmp88 = 2
 	} else if (uint64(16384) <= Value) && (Value <= 1073741823) {
-		tmp89 = 4
+		tmp88 = 4
 	} else if (1073741824 <= Value) && (Value <= 4611686018427387903) {
-		tmp89 = 8
+		tmp88 = 8
 	} else {
-		tmp89 = 0
+		tmp88 = 0
 	}
-	return tmp89
+	return tmp88
 }
 func VarintPrefix(Value uint64) uint8 {
 	Len := VarintLen(Value)
-	tmp174 := uint8(0)
+	tmp181 := uint8(0)
 	if Len == uint8(1) {
-		tmp174 = 0
+		tmp181 = 0
 	} else if Len == uint8(2) {
-		tmp174 = 1
+		tmp181 = 1
 	} else if Len == uint8(4) {
-		tmp174 = 2
+		tmp181 = 2
 	} else if Len == uint8(8) {
-		tmp174 = 3
+		tmp181 = 3
 	} else {
-		tmp174 = 255
+		tmp181 = 255
 	}
-	return tmp174
+	return tmp181
 }
 func (v *StreamPacket) HasId() bool {
 	intVal := v.hasId()
 	return intVal != 0
 }
 func (s *StreamPacket) hasId() uint8 {
-	return uint8(((s.tmp47 >> uint8(7)) & uint8(1)))
+	return uint8(((s.tmp50 >> uint8(7)) & uint8(1)))
 }
 
 func (s *StreamPacket) SetHasId(value bool) bool {
@@ -380,8 +380,8 @@ func (s *StreamPacket) SetHasId(value bool) bool {
 	}
 	return s.setHasId(intVal)
 }
-func (s *StreamPacket) setHasId(tmp614 uint8) bool {
-	s.tmp47 = (s.tmp47 & (^(uint8(1) << uint8(7)))) | ((uint8(tmp614) & uint8(1)) << uint8(7))
+func (s *StreamPacket) setHasId(tmp621 uint8) bool {
+	s.tmp50 = (s.tmp50 & (^(uint8(1) << uint8(7)))) | ((uint8(tmp621) & uint8(1)) << uint8(7))
 	return true
 }
 
@@ -390,7 +390,7 @@ func (s *StreamPacket) HasOffset() bool {
 	return intVal != 0
 }
 func (s *StreamPacket) hasOffset() uint8 {
-	return uint8(((s.tmp47 >> uint8(6)) & uint8(1)))
+	return uint8(((s.tmp50 >> uint8(6)) & uint8(1)))
 }
 
 func (s *StreamPacket) SetHasOffset(value bool) bool {
@@ -402,8 +402,8 @@ func (s *StreamPacket) SetHasOffset(value bool) bool {
 	}
 	return s.setHasOffset(intVal)
 }
-func (s *StreamPacket) setHasOffset(tmp611 uint8) bool {
-	s.tmp47 = (s.tmp47 & (^(uint8(1) << uint8(6)))) | ((uint8(tmp611) & uint8(1)) << uint8(6))
+func (s *StreamPacket) setHasOffset(tmp616 uint8) bool {
+	s.tmp50 = (s.tmp50 & (^(uint8(1) << uint8(6)))) | ((uint8(tmp616) & uint8(1)) << uint8(6))
 	return true
 }
 
@@ -412,7 +412,7 @@ func (s *StreamPacket) IsEof() bool {
 	return intVal != 0
 }
 func (s *StreamPacket) isEof() uint8 {
-	return uint8(((s.tmp47 >> uint8(5)) & uint8(1)))
+	return uint8(((s.tmp50 >> uint8(5)) & uint8(1)))
 }
 
 func (s *StreamPacket) SetIsEof(value bool) bool {
@@ -424,8 +424,8 @@ func (s *StreamPacket) SetIsEof(value bool) bool {
 	}
 	return s.setIsEof(intVal)
 }
-func (s *StreamPacket) setIsEof(tmp608 uint8) bool {
-	s.tmp47 = (s.tmp47 & (^(uint8(1) << uint8(5)))) | ((uint8(tmp608) & uint8(1)) << uint8(5))
+func (s *StreamPacket) setIsEof(tmp612 uint8) bool {
+	s.tmp50 = (s.tmp50 & (^(uint8(1) << uint8(5)))) | ((uint8(tmp612) & uint8(1)) << uint8(5))
 	return true
 }
 
@@ -434,7 +434,7 @@ func (s *StreamPacket) IsProbe() bool {
 	return intVal != 0
 }
 func (s *StreamPacket) isProbe() uint8 {
-	return uint8(((s.tmp47 >> uint8(4)) & uint8(1)))
+	return uint8(((s.tmp50 >> uint8(4)) & uint8(1)))
 }
 
 func (s *StreamPacket) SetIsProbe(value bool) bool {
@@ -446,52 +446,52 @@ func (s *StreamPacket) SetIsProbe(value bool) bool {
 	}
 	return s.setIsProbe(intVal)
 }
-func (s *StreamPacket) setIsProbe(tmp604 uint8) bool {
-	s.tmp47 = (s.tmp47 & (^(uint8(1) << uint8(4)))) | ((uint8(tmp604) & uint8(1)) << uint8(4))
+func (s *StreamPacket) setIsProbe(tmp608 uint8) bool {
+	s.tmp50 = (s.tmp50 & (^(uint8(1) << uint8(4)))) | ((uint8(tmp608) & uint8(1)) << uint8(4))
 	return true
 }
 
 func (s *StreamPacket) Reserved() uint8 {
-	return uint8(((s.tmp47 >> uint8(0)) & uint8(15)))
+	return uint8(((s.tmp50 >> uint8(0)) & uint8(15)))
 }
 
-func (s *StreamPacket) SetReserved(tmp597 uint8) bool {
-	s.tmp47 = (s.tmp47 & (^(uint8(15) << uint8(0)))) | ((uint8(tmp597) & uint8(15)) << uint8(0))
+func (s *StreamPacket) SetReserved(tmp601 uint8) bool {
+	s.tmp50 = (s.tmp50 & (^(uint8(15) << uint8(0)))) | ((uint8(tmp601) & uint8(15)) << uint8(0))
 	return true
 }
 
-type tmp766 struct {
+type tmp796 struct {
 	Id Varint
 }
 
-type Variant301 struct {
-	tmp766 tmp766
+type Variant317 struct {
+	tmp796 tmp796
 }
 
-type tmp615 struct {
+type tmp801 struct {
 	Offset Varint
 }
 
-type Variant278 struct {
-	tmp615 tmp615
+type Variant319 struct {
+	tmp801 tmp801
 }
 
 type StreamPacket struct {
-	tmp47  uint8
-	tmp407 Variant301
-	tmp376 Variant278
+	tmp50  uint8
+	tmp419 Variant317
+	tmp424 Variant319
 	Data   []uint8
 }
 
 func (s *StreamPacket) Id() *Varint {
 	if s.hasId() == 1 {
-		return &s.tmp407.tmp766.Id
+		return &s.tmp419.tmp796.Id
 	}
 	return nil
 }
-func (s *StreamPacket) SetId(tmp592 Varint) bool {
+func (s *StreamPacket) SetId(tmp595 Varint) bool {
 	if s.hasId() == 1 {
-		s.tmp407.tmp766.Id = tmp592
+		s.tmp419.tmp796.Id = tmp595
 		return true
 	}
 	return false
@@ -499,50 +499,50 @@ func (s *StreamPacket) SetId(tmp592 Varint) bool {
 
 func (s *StreamPacket) Offset() *Varint {
 	if s.hasOffset() == 1 {
-		return &s.tmp376.tmp615.Offset
+		return &s.tmp424.tmp801.Offset
 	}
 	return nil
 }
-func (s *StreamPacket) SetOffset(tmp584 Varint) bool {
+func (s *StreamPacket) SetOffset(tmp588 Varint) bool {
 	if s.hasOffset() == 1 {
-		s.tmp376.tmp615.Offset = tmp584
+		s.tmp424.tmp801.Offset = tmp588
 		return true
 	}
 	return false
 }
 
-func (s *StreamPacket) Write(tmp56 io.Writer) error {
-	tmp56ByteIO, _ := tmp56.(io.ByteWriter)
-	_ = tmp56ByteIO
+func (s *StreamPacket) Write(tmp48 io.Writer) error {
+	tmp48ByteIO, _ := tmp48.(io.ByteWriter)
+	_ = tmp48ByteIO
 	/* config.go.union("noheap")*/
-	tmp682 := [1]uint8{}
-	tmp682[0] = uint8((s.hasId() & 1)) << uint8(7)
-	tmp682[0] = tmp682[0] | (uint8((s.hasOffset() & 1)) << uint8(6))
-	tmp682[0] = tmp682[0] | (uint8((s.isEof() & 1)) << uint8(5))
-	tmp682[0] = tmp682[0] | (uint8((s.isProbe() & 1)) << uint8(4))
-	tmp682[0] = tmp682[0] | uint8((s.Reserved() & 15))
-	if tmp56ByteIO != nil {
-		if err := tmp56ByteIO.WriteByte(tmp682[0]); err != nil {
+	tmp624 := [1]uint8{}
+	tmp624[0] = uint8((s.hasId() & 1)) << uint8(7)
+	tmp624[0] = tmp624[0] | (uint8((s.hasOffset() & 1)) << uint8(6))
+	tmp624[0] = tmp624[0] | (uint8((s.isEof() & 1)) << uint8(5))
+	tmp624[0] = tmp624[0] | (uint8((s.isProbe() & 1)) << uint8(4))
+	tmp624[0] = tmp624[0] | uint8((s.Reserved() & 15))
+	if tmp48ByteIO != nil {
+		if err := tmp48ByteIO.WriteByte(tmp624[0]); err != nil {
 			return err
 		}
 	} else {
-		if _, err := tmp56.Write([]byte{tmp682[0]}); err != nil {
+		if _, err := tmp48.Write([]byte{tmp624[0]}); err != nil {
 			return err
 		}
 	}
 	if s.hasId() == 1 {
-		tmp607 := s.tmp407.tmp766.Id.Write(tmp56)
-		if tmp607 != nil {
-			return tmp607
+		tmp620 := s.tmp419.tmp796.Id.Write(tmp48)
+		if tmp620 != nil {
+			return tmp620
 		}
 	}
 	if s.hasOffset() == 1 {
-		tmp603 := s.tmp376.tmp615.Offset.Write(tmp56)
-		if tmp603 != nil {
-			return tmp603
+		tmp615 := s.tmp424.tmp801.Offset.Write(tmp48)
+		if tmp615 != nil {
+			return tmp615
 		}
 	}
-	if _, err := tmp56.Write(s.Data); err != nil {
+	if _, err := tmp48.Write(s.Data); err != nil {
 		return err
 	}
 	return nil
@@ -562,36 +562,36 @@ func (s *StreamPacket) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (s *StreamPacket) EncodeSlice(tmp56 []byte, tmp56Offset *int) error {
+func (s *StreamPacket) EncodeSlice(tmp48 []byte, tmp48Offset *int) error {
 	/* config.go.union("noheap")*/
-	tmp682 := []uint8{}
-	if len(tmp56)-*tmp56Offset < int(1) {
+	tmp624 := []uint8{}
+	if len(tmp48)-*tmp48Offset < int(1) {
 		return errors.New("not enough space to reserve data for field \"StreamPacket::Reserved\"")
 	}
-	tmp682 = tmp56[*tmp56Offset : *tmp56Offset+int(1)]
-	tmp682[0] = uint8((s.hasId() & 1)) << uint8(7)
-	tmp682[0] = tmp682[0] | (uint8((s.hasOffset() & 1)) << uint8(6))
-	tmp682[0] = tmp682[0] | (uint8((s.isEof() & 1)) << uint8(5))
-	tmp682[0] = tmp682[0] | (uint8((s.isProbe() & 1)) << uint8(4))
-	tmp682[0] = tmp682[0] | uint8((s.Reserved() & 15))
-	*tmp56Offset += int(1)
+	tmp624 = tmp48[*tmp48Offset : *tmp48Offset+int(1)]
+	tmp624[0] = uint8((s.hasId() & 1)) << uint8(7)
+	tmp624[0] = tmp624[0] | (uint8((s.hasOffset() & 1)) << uint8(6))
+	tmp624[0] = tmp624[0] | (uint8((s.isEof() & 1)) << uint8(5))
+	tmp624[0] = tmp624[0] | (uint8((s.isProbe() & 1)) << uint8(4))
+	tmp624[0] = tmp624[0] | uint8((s.Reserved() & 15))
+	*tmp48Offset += int(1)
 	if s.hasId() == 1 {
-		tmp607 := s.tmp407.tmp766.Id.EncodeSlice(tmp56, tmp56Offset)
-		if tmp607 != nil {
-			return tmp607
+		tmp620 := s.tmp419.tmp796.Id.EncodeSlice(tmp48, tmp48Offset)
+		if tmp620 != nil {
+			return tmp620
 		}
 	}
 	if s.hasOffset() == 1 {
-		tmp603 := s.tmp376.tmp615.Offset.EncodeSlice(tmp56, tmp56Offset)
-		if tmp603 != nil {
-			return tmp603
+		tmp615 := s.tmp424.tmp801.Offset.EncodeSlice(tmp48, tmp48Offset)
+		if tmp615 != nil {
+			return tmp615
 		}
 	}
-	if len(tmp56)-*tmp56Offset < int(0+len(s.Data)) {
+	if len(tmp48)-*tmp48Offset < int(0+len(s.Data)) {
 		return errors.New("not enough space to write for field \"StreamPacket::Data\"")
 	}
-	copy(tmp56[*tmp56Offset:*tmp56Offset+int(len(s.Data))], s.Data)
-	*tmp56Offset += int(len(s.Data))
+	copy(tmp48[*tmp48Offset:*tmp48Offset+int(len(s.Data))], s.Data)
+	*tmp48Offset += int(len(s.Data))
 	return nil
 }
 func (s *StreamPacket) Encode(buf []byte) ([]byte, error) {
@@ -609,33 +609,33 @@ func (s *StreamPacket) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (s *StreamPacket) Append(tmp56 []byte) ([]byte, error) {
+func (s *StreamPacket) Append(tmp48 []byte) ([]byte, error) {
 	/* config.go.union("noheap")*/
-	tmp682 := [1]uint8{}
-	tmp682[0] = uint8((s.hasId() & 1)) << uint8(7)
-	tmp682[0] = tmp682[0] | (uint8((s.hasOffset() & 1)) << uint8(6))
-	tmp682[0] = tmp682[0] | (uint8((s.isEof() & 1)) << uint8(5))
-	tmp682[0] = tmp682[0] | (uint8((s.isProbe() & 1)) << uint8(4))
-	tmp682[0] = tmp682[0] | uint8((s.Reserved() & 15))
-	tmp56 = append(tmp56, tmp682[:1]...)
+	tmp624 := [1]uint8{}
+	tmp624[0] = uint8((s.hasId() & 1)) << uint8(7)
+	tmp624[0] = tmp624[0] | (uint8((s.hasOffset() & 1)) << uint8(6))
+	tmp624[0] = tmp624[0] | (uint8((s.isEof() & 1)) << uint8(5))
+	tmp624[0] = tmp624[0] | (uint8((s.isProbe() & 1)) << uint8(4))
+	tmp624[0] = tmp624[0] | uint8((s.Reserved() & 15))
+	tmp48 = append(tmp48, tmp624[:1]...)
 	if s.hasId() == 1 {
-		var tmp607 error
-		tmp56, tmp607 = s.tmp407.tmp766.Id.Append(tmp56)
+		var tmp620 error
+		tmp48, tmp620 = s.tmp419.tmp796.Id.Append(tmp48)
 
-		if tmp607 != nil {
-			return nil, tmp607
+		if tmp620 != nil {
+			return nil, tmp620
 		}
 	}
 	if s.hasOffset() == 1 {
-		var tmp603 error
-		tmp56, tmp603 = s.tmp376.tmp615.Offset.Append(tmp56)
+		var tmp615 error
+		tmp48, tmp615 = s.tmp424.tmp801.Offset.Append(tmp48)
 
-		if tmp603 != nil {
-			return nil, tmp603
+		if tmp615 != nil {
+			return nil, tmp615
 		}
 	}
-	tmp56 = append(tmp56, s.Data...)
-	return tmp56, nil
+	tmp48 = append(tmp48, s.Data...)
+	return tmp48, nil
 }
 func (s *StreamPacket) MustAppend(buf []byte) []byte {
 	var err error
@@ -646,14 +646,14 @@ func (s *StreamPacket) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (s *StreamPacket) Read(tmp41 io.Reader) error {
-	tmp41ByteIO, _ := tmp41.(io.ByteReader)
-	_ = tmp41ByteIO
+func (s *StreamPacket) Read(tmp39 io.Reader) error {
+	tmp39ByteIO, _ := tmp39.(io.ByteReader)
+	_ = tmp39ByteIO
 	/* config.go.union("noheap")*/
-	tmp721 := [1]uint8{}
-	if tmp41ByteIO != nil {
+	tmp723 := [1]uint8{}
+	if tmp39ByteIO != nil {
 		var err error
-		tmp721[0], err = tmp41ByteIO.ReadByte()
+		tmp723[0], err = tmp39ByteIO.ReadByte()
 		if err != nil {
 			return err
 		}
@@ -661,44 +661,44 @@ func (s *StreamPacket) Read(tmp41 io.Reader) error {
 		var err error
 		var n int
 		buf := [1]byte{0}
-		if n, err = io.ReadFull(tmp41, buf[:]); err != nil {
+		if n, err = io.ReadFull(tmp39, buf[:]); err != nil {
 			return err
 		}
 		if n != 1 {
-			return fmt.Errorf("failed to read byte for field \"tmp273\": expected to read 1 byte, but read %d bytes", n)
+			return fmt.Errorf("failed to read byte for field \"tmp291\": expected to read 1 byte, but read %d bytes", n)
 		}
-		tmp721[0] = buf[0]
+		tmp723[0] = buf[0]
 	}
-	tmp219 := uint8(0)
-	tmp219 = uint8(((tmp721[0] & 128) >> uint8(7)))
-	s.setHasId(tmp219)
-	tmp787 := uint8(0)
-	tmp787 = uint8(((tmp721[0] & uint8(64)) >> uint8(6)))
-	s.setHasOffset(tmp787)
-	tmp690 := uint8(0)
-	tmp690 = uint8(((tmp721[0] & uint8(32)) >> uint8(5)))
-	s.setIsEof(tmp690)
-	tmp678 := uint8(0)
-	tmp678 = uint8(((tmp721[0] & uint8(16)) >> uint8(4)))
-	s.setIsProbe(tmp678)
-	tmp715 := uint8(0)
-	tmp715 = uint8((tmp721[0] & uint8(15)))
-	s.SetReserved(tmp715)
+	tmp249 := uint8(0)
+	tmp249 = uint8(((tmp723[0] & 128) >> uint8(7)))
+	s.setHasId(tmp249)
+	tmp747 := uint8(0)
+	tmp747 = uint8(((tmp723[0] & uint8(64)) >> uint8(6)))
+	s.setHasOffset(tmp747)
+	tmp720 := uint8(0)
+	tmp720 = uint8(((tmp723[0] & uint8(32)) >> uint8(5)))
+	s.setIsEof(tmp720)
+	tmp638 := uint8(0)
+	tmp638 = uint8(((tmp723[0] & uint8(16)) >> uint8(4)))
+	s.setIsProbe(tmp638)
+	tmp629 := uint8(0)
+	tmp629 = uint8((tmp723[0] & uint8(15)))
+	s.SetReserved(tmp629)
 	if s.hasId() == 1 {
-		tmp599 := s.tmp407.tmp766.Id.Read(tmp41)
-		if tmp599 != nil {
-			return tmp599
+		tmp611 := s.tmp419.tmp796.Id.Read(tmp39)
+		if tmp611 != nil {
+			return tmp611
 		}
 	}
 	if s.hasOffset() == 1 {
-		tmp788 := s.tmp376.tmp615.Offset.Read(tmp41)
-		if tmp788 != nil {
-			return tmp788
+		tmp607 := s.tmp424.tmp801.Offset.Read(tmp39)
+		if tmp607 != nil {
+			return tmp607
 		}
 	}
 	{
 		var readErr error
-		s.Data, readErr = io.ReadAll(tmp41)
+		s.Data, readErr = io.ReadAll(tmp39)
 		if readErr != nil {
 			return readErr
 		}
@@ -723,43 +723,43 @@ func (s *StreamPacket) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (s *StreamPacket) DecodeSlice(tmp41 []byte, tmp41Offset *int) error {
+func (s *StreamPacket) DecodeSlice(tmp39 []byte, tmp39Offset *int) error {
 	/* config.go.union("noheap")*/
-	tmp721 := []uint8{}
-	if len(tmp41)-*tmp41Offset < 1 {
-		return errors.New("not enough data to read for field \"tmp273\"")
+	tmp723 := []uint8{}
+	if len(tmp39)-*tmp39Offset < 1 {
+		return errors.New("not enough data to read for field \"tmp291\"")
 	}
-	tmp721 = tmp41[*tmp41Offset : *tmp41Offset+1]
-	*tmp41Offset += int(1)
-	tmp219 := uint8(0)
-	tmp219 = uint8(((tmp721[0] & 128) >> uint8(7)))
-	s.setHasId(tmp219)
-	tmp787 := uint8(0)
-	tmp787 = uint8(((tmp721[0] & uint8(64)) >> uint8(6)))
-	s.setHasOffset(tmp787)
-	tmp690 := uint8(0)
-	tmp690 = uint8(((tmp721[0] & uint8(32)) >> uint8(5)))
-	s.setIsEof(tmp690)
-	tmp678 := uint8(0)
-	tmp678 = uint8(((tmp721[0] & uint8(16)) >> uint8(4)))
-	s.setIsProbe(tmp678)
-	tmp715 := uint8(0)
-	tmp715 = uint8((tmp721[0] & uint8(15)))
-	s.SetReserved(tmp715)
+	tmp723 = tmp39[*tmp39Offset : *tmp39Offset+1]
+	*tmp39Offset += int(1)
+	tmp249 := uint8(0)
+	tmp249 = uint8(((tmp723[0] & 128) >> uint8(7)))
+	s.setHasId(tmp249)
+	tmp747 := uint8(0)
+	tmp747 = uint8(((tmp723[0] & uint8(64)) >> uint8(6)))
+	s.setHasOffset(tmp747)
+	tmp720 := uint8(0)
+	tmp720 = uint8(((tmp723[0] & uint8(32)) >> uint8(5)))
+	s.setIsEof(tmp720)
+	tmp638 := uint8(0)
+	tmp638 = uint8(((tmp723[0] & uint8(16)) >> uint8(4)))
+	s.setIsProbe(tmp638)
+	tmp629 := uint8(0)
+	tmp629 = uint8((tmp723[0] & uint8(15)))
+	s.SetReserved(tmp629)
 	if s.hasId() == 1 {
-		tmp599 := s.tmp407.tmp766.Id.DecodeSlice(tmp41, tmp41Offset)
-		if tmp599 != nil {
-			return tmp599
+		tmp611 := s.tmp419.tmp796.Id.DecodeSlice(tmp39, tmp39Offset)
+		if tmp611 != nil {
+			return tmp611
 		}
 	}
 	if s.hasOffset() == 1 {
-		tmp788 := s.tmp376.tmp615.Offset.DecodeSlice(tmp41, tmp41Offset)
-		if tmp788 != nil {
-			return tmp788
+		tmp607 := s.tmp424.tmp801.Offset.DecodeSlice(tmp39, tmp39Offset)
+		if tmp607 != nil {
+			return tmp607
 		}
 	}
-	s.Data = tmp41[*tmp41Offset:]
-	*tmp41Offset += len(s.Data)
+	s.Data = tmp39[*tmp39Offset:]
+	*tmp39Offset += len(s.Data)
 	return nil
 }
 func (s *StreamPacket) Decode(buf []byte) ([]byte, error) {
@@ -786,14 +786,14 @@ type ACKRange struct {
 	Delta  Varint
 }
 
-func (a *ACKRange) Write(tmp290 io.Writer) error {
-	tmp650 := a.Offset.Write(tmp290)
-	if tmp650 != nil {
-		return tmp650
+func (a *ACKRange) Write(tmp227 io.Writer) error {
+	tmp763 := a.Offset.Write(tmp227)
+	if tmp763 != nil {
+		return tmp763
 	}
-	tmp642 := a.Delta.Write(tmp290)
-	if tmp642 != nil {
-		return tmp642
+	tmp740 := a.Delta.Write(tmp227)
+	if tmp740 != nil {
+		return tmp740
 	}
 	return nil
 }
@@ -812,14 +812,14 @@ func (s *ACKRange) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (a *ACKRange) EncodeSlice(tmp290 []byte, tmp290Offset *int) error {
-	tmp650 := a.Offset.EncodeSlice(tmp290, tmp290Offset)
-	if tmp650 != nil {
-		return tmp650
+func (a *ACKRange) EncodeSlice(tmp227 []byte, tmp227Offset *int) error {
+	tmp763 := a.Offset.EncodeSlice(tmp227, tmp227Offset)
+	if tmp763 != nil {
+		return tmp763
 	}
-	tmp642 := a.Delta.EncodeSlice(tmp290, tmp290Offset)
-	if tmp642 != nil {
-		return tmp642
+	tmp740 := a.Delta.EncodeSlice(tmp227, tmp227Offset)
+	if tmp740 != nil {
+		return tmp740
 	}
 	return nil
 }
@@ -838,20 +838,20 @@ func (s *ACKRange) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (a *ACKRange) Append(tmp290 []byte) ([]byte, error) {
-	var tmp650 error
-	tmp290, tmp650 = a.Offset.Append(tmp290)
+func (a *ACKRange) Append(tmp227 []byte) ([]byte, error) {
+	var tmp763 error
+	tmp227, tmp763 = a.Offset.Append(tmp227)
 
-	if tmp650 != nil {
-		return nil, tmp650
+	if tmp763 != nil {
+		return nil, tmp763
 	}
-	var tmp642 error
-	tmp290, tmp642 = a.Delta.Append(tmp290)
+	var tmp740 error
+	tmp227, tmp740 = a.Delta.Append(tmp227)
 
-	if tmp642 != nil {
-		return nil, tmp642
+	if tmp740 != nil {
+		return nil, tmp740
 	}
-	return tmp290, nil
+	return tmp227, nil
 }
 func (s *ACKRange) MustAppend(buf []byte) []byte {
 	var err error
@@ -862,14 +862,14 @@ func (s *ACKRange) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (a *ACKRange) Read(tmp288 io.Reader) error {
-	tmp645 := a.Offset.Read(tmp288)
-	if tmp645 != nil {
-		return tmp645
+func (a *ACKRange) Read(tmp228 io.Reader) error {
+	tmp666 := a.Offset.Read(tmp228)
+	if tmp666 != nil {
+		return tmp666
 	}
-	tmp637 := a.Delta.Read(tmp288)
-	if tmp637 != nil {
-		return tmp637
+	tmp683 := a.Delta.Read(tmp228)
+	if tmp683 != nil {
+		return tmp683
 	}
 	return nil
 }
@@ -891,14 +891,14 @@ func (s *ACKRange) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (a *ACKRange) DecodeSlice(tmp288 []byte, tmp288Offset *int) error {
-	tmp645 := a.Offset.DecodeSlice(tmp288, tmp288Offset)
-	if tmp645 != nil {
-		return tmp645
+func (a *ACKRange) DecodeSlice(tmp228 []byte, tmp228Offset *int) error {
+	tmp666 := a.Offset.DecodeSlice(tmp228, tmp228Offset)
+	if tmp666 != nil {
+		return tmp666
 	}
-	tmp637 := a.Delta.DecodeSlice(tmp288, tmp288Offset)
-	if tmp637 != nil {
-		return tmp637
+	tmp683 := a.Delta.DecodeSlice(tmp228, tmp228Offset)
+	if tmp683 != nil {
+		return tmp683
 	}
 	return nil
 }
@@ -923,34 +923,39 @@ func (s *ACKRange) DecodeExact(buf []byte) error {
 
 type StreamACKPacket struct {
 	LargestAck Varint
+	AckDelay   Varint
 	FirstDelta Varint
 	Len        Varint
 	Ranges     []ACKRange
 }
 
-func (s *StreamACKPacket) Write(tmp133 io.Writer) error {
-	tmp624 := s.LargestAck.Write(tmp133)
-	if tmp624 != nil {
-		return tmp624
+func (s *StreamACKPacket) Write(tmp90 io.Writer) error {
+	tmp655 := s.LargestAck.Write(tmp90)
+	if tmp655 != nil {
+		return tmp655
 	}
-	tmp627 := s.FirstDelta.Write(tmp133)
-	if tmp627 != nil {
-		return tmp627
+	tmp658 := s.AckDelay.Write(tmp90)
+	if tmp658 != nil {
+		return tmp658
 	}
-	tmp664 := s.Len.Write(tmp133)
-	if tmp664 != nil {
-		return tmp664
+	tmp651 := s.FirstDelta.Write(tmp90)
+	if tmp651 != nil {
+		return tmp651
+	}
+	tmp646 := s.Len.Write(tmp90)
+	if tmp646 != nil {
+		return tmp646
 	}
 	if len(s.Ranges) != int(int(s.Len.Value())) {
 		return fmt.Errorf("size mismatch when writing field \"StreamACKPacket::Ranges\": expected %d, got %d", int(int(s.Len.Value())), len(s.Ranges))
 	}
-	tmp291 := int(0)
-	for tmp291 < int(s.Len.Value()) {
-		tmp655 := s.Ranges[tmp291].Write(tmp133)
-		if tmp655 != nil {
-			return tmp655
+	tmp304 := int(0)
+	for tmp304 < int(s.Len.Value()) {
+		tmp682 := s.Ranges[tmp304].Write(tmp90)
+		if tmp682 != nil {
+			return tmp682
 		}
-		tmp291 = tmp291 + int(1)
+		tmp304 = tmp304 + int(1)
 	}
 	return nil
 }
@@ -969,29 +974,33 @@ func (s *StreamACKPacket) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (s *StreamACKPacket) EncodeSlice(tmp133 []byte, tmp133Offset *int) error {
-	tmp624 := s.LargestAck.EncodeSlice(tmp133, tmp133Offset)
-	if tmp624 != nil {
-		return tmp624
+func (s *StreamACKPacket) EncodeSlice(tmp90 []byte, tmp90Offset *int) error {
+	tmp655 := s.LargestAck.EncodeSlice(tmp90, tmp90Offset)
+	if tmp655 != nil {
+		return tmp655
 	}
-	tmp627 := s.FirstDelta.EncodeSlice(tmp133, tmp133Offset)
-	if tmp627 != nil {
-		return tmp627
+	tmp658 := s.AckDelay.EncodeSlice(tmp90, tmp90Offset)
+	if tmp658 != nil {
+		return tmp658
 	}
-	tmp664 := s.Len.EncodeSlice(tmp133, tmp133Offset)
-	if tmp664 != nil {
-		return tmp664
+	tmp651 := s.FirstDelta.EncodeSlice(tmp90, tmp90Offset)
+	if tmp651 != nil {
+		return tmp651
+	}
+	tmp646 := s.Len.EncodeSlice(tmp90, tmp90Offset)
+	if tmp646 != nil {
+		return tmp646
 	}
 	if len(s.Ranges) != int(int(s.Len.Value())) {
 		return fmt.Errorf("size mismatch when writing field \"StreamACKPacket::Ranges\": expected %d, got %d", int(int(s.Len.Value())), len(s.Ranges))
 	}
-	tmp291 := int(0)
-	for tmp291 < int(s.Len.Value()) {
-		tmp655 := s.Ranges[tmp291].EncodeSlice(tmp133, tmp133Offset)
-		if tmp655 != nil {
-			return tmp655
+	tmp304 := int(0)
+	for tmp304 < int(s.Len.Value()) {
+		tmp682 := s.Ranges[tmp304].EncodeSlice(tmp90, tmp90Offset)
+		if tmp682 != nil {
+			return tmp682
 		}
-		tmp291 = tmp291 + int(1)
+		tmp304 = tmp304 + int(1)
 	}
 	return nil
 }
@@ -1010,39 +1019,45 @@ func (s *StreamACKPacket) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (s *StreamACKPacket) Append(tmp133 []byte) ([]byte, error) {
-	var tmp624 error
-	tmp133, tmp624 = s.LargestAck.Append(tmp133)
+func (s *StreamACKPacket) Append(tmp90 []byte) ([]byte, error) {
+	var tmp655 error
+	tmp90, tmp655 = s.LargestAck.Append(tmp90)
 
-	if tmp624 != nil {
-		return nil, tmp624
+	if tmp655 != nil {
+		return nil, tmp655
 	}
-	var tmp627 error
-	tmp133, tmp627 = s.FirstDelta.Append(tmp133)
+	var tmp658 error
+	tmp90, tmp658 = s.AckDelay.Append(tmp90)
 
-	if tmp627 != nil {
-		return nil, tmp627
+	if tmp658 != nil {
+		return nil, tmp658
 	}
-	var tmp664 error
-	tmp133, tmp664 = s.Len.Append(tmp133)
+	var tmp651 error
+	tmp90, tmp651 = s.FirstDelta.Append(tmp90)
 
-	if tmp664 != nil {
-		return nil, tmp664
+	if tmp651 != nil {
+		return nil, tmp651
+	}
+	var tmp646 error
+	tmp90, tmp646 = s.Len.Append(tmp90)
+
+	if tmp646 != nil {
+		return nil, tmp646
 	}
 	if len(s.Ranges) != int(int(s.Len.Value())) {
 		return nil, fmt.Errorf("size mismatch when writing field \"StreamACKPacket::Ranges\": expected %d, got %d", int(int(s.Len.Value())), len(s.Ranges))
 	}
-	tmp291 := int(0)
-	for tmp291 < int(s.Len.Value()) {
-		var tmp655 error
-		tmp133, tmp655 = s.Ranges[tmp291].Append(tmp133)
+	tmp304 := int(0)
+	for tmp304 < int(s.Len.Value()) {
+		var tmp682 error
+		tmp90, tmp682 = s.Ranges[tmp304].Append(tmp90)
 
-		if tmp655 != nil {
-			return nil, tmp655
+		if tmp682 != nil {
+			return nil, tmp682
 		}
-		tmp291 = tmp291 + int(1)
+		tmp304 = tmp304 + int(1)
 	}
-	return tmp133, nil
+	return tmp90, nil
 }
 func (s *StreamACKPacket) MustAppend(buf []byte) []byte {
 	var err error
@@ -1053,28 +1068,32 @@ func (s *StreamACKPacket) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (s *StreamACKPacket) Read(tmp132 io.Reader) error {
-	tmp667 := s.LargestAck.Read(tmp132)
-	if tmp667 != nil {
-		return tmp667
+func (s *StreamACKPacket) Read(tmp89 io.Reader) error {
+	tmp672 := s.LargestAck.Read(tmp89)
+	if tmp672 != nil {
+		return tmp672
 	}
-	tmp593 := s.FirstDelta.Read(tmp132)
-	if tmp593 != nil {
-		return tmp593
+	tmp692 := s.AckDelay.Read(tmp89)
+	if tmp692 != nil {
+		return tmp692
 	}
-	tmp587 := s.Len.Read(tmp132)
-	if tmp587 != nil {
-		return tmp587
+	tmp688 := s.FirstDelta.Read(tmp89)
+	if tmp688 != nil {
+		return tmp688
 	}
-	tmp357 := int(0)
-	for tmp357 < int(s.Len.Value()) {
-		tmp590 := ACKRange{}
-		tmp579 := tmp590.Read(tmp132)
-		if tmp579 != nil {
-			return tmp579
+	tmp685 := s.Len.Read(tmp89)
+	if tmp685 != nil {
+		return tmp685
+	}
+	tmp360 := int(0)
+	for tmp360 < int(s.Len.Value()) {
+		tmp591 := ACKRange{}
+		tmp592 := tmp591.Read(tmp89)
+		if tmp592 != nil {
+			return tmp592
 		}
-		s.Ranges = append(s.Ranges, tmp590)
-		tmp357 = tmp357 + int(1)
+		s.Ranges = append(s.Ranges, tmp591)
+		tmp360 = tmp360 + int(1)
 	}
 	return nil
 }
@@ -1096,28 +1115,32 @@ func (s *StreamACKPacket) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (s *StreamACKPacket) DecodeSlice(tmp132 []byte, tmp132Offset *int) error {
-	tmp667 := s.LargestAck.DecodeSlice(tmp132, tmp132Offset)
-	if tmp667 != nil {
-		return tmp667
+func (s *StreamACKPacket) DecodeSlice(tmp89 []byte, tmp89Offset *int) error {
+	tmp672 := s.LargestAck.DecodeSlice(tmp89, tmp89Offset)
+	if tmp672 != nil {
+		return tmp672
 	}
-	tmp593 := s.FirstDelta.DecodeSlice(tmp132, tmp132Offset)
-	if tmp593 != nil {
-		return tmp593
+	tmp692 := s.AckDelay.DecodeSlice(tmp89, tmp89Offset)
+	if tmp692 != nil {
+		return tmp692
 	}
-	tmp587 := s.Len.DecodeSlice(tmp132, tmp132Offset)
-	if tmp587 != nil {
-		return tmp587
+	tmp688 := s.FirstDelta.DecodeSlice(tmp89, tmp89Offset)
+	if tmp688 != nil {
+		return tmp688
 	}
-	tmp357 := int(0)
-	for tmp357 < int(s.Len.Value()) {
-		tmp590 := ACKRange{}
-		tmp579 := tmp590.DecodeSlice(tmp132, tmp132Offset)
-		if tmp579 != nil {
-			return tmp579
+	tmp685 := s.Len.DecodeSlice(tmp89, tmp89Offset)
+	if tmp685 != nil {
+		return tmp685
+	}
+	tmp360 := int(0)
+	for tmp360 < int(s.Len.Value()) {
+		tmp591 := ACKRange{}
+		tmp592 := tmp591.DecodeSlice(tmp89, tmp89Offset)
+		if tmp592 != nil {
+			return tmp592
 		}
-		s.Ranges = append(s.Ranges, tmp590)
-		tmp357 = tmp357 + int(1)
+		s.Ranges = append(s.Ranges, tmp591)
+		tmp360 = tmp360 + int(1)
 	}
 	return nil
 }
@@ -1145,14 +1168,14 @@ type UpdateWindow struct {
 	WindowMax Varint
 }
 
-func (u *UpdateWindow) Write(tmp263 io.Writer) error {
-	tmp569 := u.Id.Write(tmp263)
-	if tmp569 != nil {
-		return tmp569
+func (u *UpdateWindow) Write(tmp219 io.Writer) error {
+	tmp576 := u.Id.Write(tmp219)
+	if tmp576 != nil {
+		return tmp576
 	}
-	tmp567 := u.WindowMax.Write(tmp263)
-	if tmp567 != nil {
-		return tmp567
+	tmp574 := u.WindowMax.Write(tmp219)
+	if tmp574 != nil {
+		return tmp574
 	}
 	return nil
 }
@@ -1171,14 +1194,14 @@ func (s *UpdateWindow) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (u *UpdateWindow) EncodeSlice(tmp263 []byte, tmp263Offset *int) error {
-	tmp569 := u.Id.EncodeSlice(tmp263, tmp263Offset)
-	if tmp569 != nil {
-		return tmp569
+func (u *UpdateWindow) EncodeSlice(tmp219 []byte, tmp219Offset *int) error {
+	tmp576 := u.Id.EncodeSlice(tmp219, tmp219Offset)
+	if tmp576 != nil {
+		return tmp576
 	}
-	tmp567 := u.WindowMax.EncodeSlice(tmp263, tmp263Offset)
-	if tmp567 != nil {
-		return tmp567
+	tmp574 := u.WindowMax.EncodeSlice(tmp219, tmp219Offset)
+	if tmp574 != nil {
+		return tmp574
 	}
 	return nil
 }
@@ -1197,20 +1220,20 @@ func (s *UpdateWindow) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (u *UpdateWindow) Append(tmp263 []byte) ([]byte, error) {
-	var tmp569 error
-	tmp263, tmp569 = u.Id.Append(tmp263)
+func (u *UpdateWindow) Append(tmp219 []byte) ([]byte, error) {
+	var tmp576 error
+	tmp219, tmp576 = u.Id.Append(tmp219)
 
-	if tmp569 != nil {
-		return nil, tmp569
+	if tmp576 != nil {
+		return nil, tmp576
 	}
-	var tmp567 error
-	tmp263, tmp567 = u.WindowMax.Append(tmp263)
+	var tmp574 error
+	tmp219, tmp574 = u.WindowMax.Append(tmp219)
 
-	if tmp567 != nil {
-		return nil, tmp567
+	if tmp574 != nil {
+		return nil, tmp574
 	}
-	return tmp263, nil
+	return tmp219, nil
 }
 func (s *UpdateWindow) MustAppend(buf []byte) []byte {
 	var err error
@@ -1221,14 +1244,14 @@ func (s *UpdateWindow) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (u *UpdateWindow) Read(tmp265 io.Reader) error {
-	tmp574 := u.Id.Read(tmp265)
-	if tmp574 != nil {
-		return tmp574
+func (u *UpdateWindow) Read(tmp218 io.Reader) error {
+	tmp581 := u.Id.Read(tmp218)
+	if tmp581 != nil {
+		return tmp581
 	}
-	tmp572 := u.WindowMax.Read(tmp265)
-	if tmp572 != nil {
-		return tmp572
+	tmp579 := u.WindowMax.Read(tmp218)
+	if tmp579 != nil {
+		return tmp579
 	}
 	return nil
 }
@@ -1250,14 +1273,14 @@ func (s *UpdateWindow) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (u *UpdateWindow) DecodeSlice(tmp265 []byte, tmp265Offset *int) error {
-	tmp574 := u.Id.DecodeSlice(tmp265, tmp265Offset)
-	if tmp574 != nil {
-		return tmp574
+func (u *UpdateWindow) DecodeSlice(tmp218 []byte, tmp218Offset *int) error {
+	tmp581 := u.Id.DecodeSlice(tmp218, tmp218Offset)
+	if tmp581 != nil {
+		return tmp581
 	}
-	tmp572 := u.WindowMax.DecodeSlice(tmp265, tmp265Offset)
-	if tmp572 != nil {
-		return tmp572
+	tmp579 := u.WindowMax.DecodeSlice(tmp218, tmp218Offset)
+	if tmp579 != nil {
+		return tmp579
 	}
 	return nil
 }
@@ -1284,10 +1307,10 @@ type CancelStreamPacket struct {
 	Id Varint
 }
 
-func (c *CancelStreamPacket) Write(tmp354 io.Writer) error {
-	tmp563 := c.Id.Write(tmp354)
-	if tmp563 != nil {
-		return tmp563
+func (c *CancelStreamPacket) Write(tmp273 io.Writer) error {
+	tmp570 := c.Id.Write(tmp273)
+	if tmp570 != nil {
+		return tmp570
 	}
 	return nil
 }
@@ -1306,10 +1329,10 @@ func (s *CancelStreamPacket) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (c *CancelStreamPacket) EncodeSlice(tmp354 []byte, tmp354Offset *int) error {
-	tmp563 := c.Id.EncodeSlice(tmp354, tmp354Offset)
-	if tmp563 != nil {
-		return tmp563
+func (c *CancelStreamPacket) EncodeSlice(tmp273 []byte, tmp273Offset *int) error {
+	tmp570 := c.Id.EncodeSlice(tmp273, tmp273Offset)
+	if tmp570 != nil {
+		return tmp570
 	}
 	return nil
 }
@@ -1328,14 +1351,14 @@ func (s *CancelStreamPacket) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (c *CancelStreamPacket) Append(tmp354 []byte) ([]byte, error) {
-	var tmp563 error
-	tmp354, tmp563 = c.Id.Append(tmp354)
+func (c *CancelStreamPacket) Append(tmp273 []byte) ([]byte, error) {
+	var tmp570 error
+	tmp273, tmp570 = c.Id.Append(tmp273)
 
-	if tmp563 != nil {
-		return nil, tmp563
+	if tmp570 != nil {
+		return nil, tmp570
 	}
-	return tmp354, nil
+	return tmp273, nil
 }
 func (s *CancelStreamPacket) MustAppend(buf []byte) []byte {
 	var err error
@@ -1346,10 +1369,10 @@ func (s *CancelStreamPacket) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (c *CancelStreamPacket) Read(tmp355 io.Reader) error {
-	tmp565 := c.Id.Read(tmp355)
-	if tmp565 != nil {
-		return tmp565
+func (c *CancelStreamPacket) Read(tmp275 io.Reader) error {
+	tmp572 := c.Id.Read(tmp275)
+	if tmp572 != nil {
+		return tmp572
 	}
 	return nil
 }
@@ -1371,10 +1394,10 @@ func (s *CancelStreamPacket) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (c *CancelStreamPacket) DecodeSlice(tmp355 []byte, tmp355Offset *int) error {
-	tmp565 := c.Id.DecodeSlice(tmp355, tmp355Offset)
-	if tmp565 != nil {
-		return tmp565
+func (c *CancelStreamPacket) DecodeSlice(tmp275 []byte, tmp275Offset *int) error {
+	tmp572 := c.Id.DecodeSlice(tmp275, tmp275Offset)
+	if tmp572 != nil {
+		return tmp572
 	}
 	return nil
 }
@@ -1419,10 +1442,10 @@ type PingBody struct {
 	Nanos uint64
 }
 
-func (p *PingBody) Write(tmp350 io.Writer) error {
-	tmp400 := [8]uint8{}
-	binary.BigEndian.PutUint64(tmp400[:], uint64(p.Nanos))
-	if _, err := tmp350.Write(tmp400[:8]); err != nil {
+func (p *PingBody) Write(tmp354 io.Writer) error {
+	tmp409 := [8]uint8{}
+	binary.BigEndian.PutUint64(tmp409[:], uint64(p.Nanos))
+	if _, err := tmp354.Write(tmp409[:8]); err != nil {
 		return err
 	}
 	return nil
@@ -1442,14 +1465,14 @@ func (s *PingBody) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (p *PingBody) EncodeSlice(tmp350 []byte, tmp350Offset *int) error {
-	tmp400 := []uint8{}
-	if len(tmp350)-*tmp350Offset < int(8) {
+func (p *PingBody) EncodeSlice(tmp354 []byte, tmp354Offset *int) error {
+	tmp409 := []uint8{}
+	if len(tmp354)-*tmp354Offset < int(8) {
 		return errors.New("not enough space to reserve data for field \"PingBody::Nanos\"")
 	}
-	tmp400 = tmp350[*tmp350Offset : *tmp350Offset+int(8)]
-	binary.BigEndian.PutUint64(tmp400[:], uint64(p.Nanos))
-	*tmp350Offset += int(8)
+	tmp409 = tmp354[*tmp354Offset : *tmp354Offset+int(8)]
+	binary.BigEndian.PutUint64(tmp409[:], uint64(p.Nanos))
+	*tmp354Offset += int(8)
 	return nil
 }
 func (s *PingBody) Encode(buf []byte) ([]byte, error) {
@@ -1467,11 +1490,11 @@ func (s *PingBody) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (p *PingBody) Append(tmp350 []byte) ([]byte, error) {
-	tmp400 := [8]uint8{}
-	binary.BigEndian.PutUint64(tmp400[:], uint64(p.Nanos))
-	tmp350 = append(tmp350, tmp400[:8]...)
-	return tmp350, nil
+func (p *PingBody) Append(tmp354 []byte) ([]byte, error) {
+	tmp409 := [8]uint8{}
+	binary.BigEndian.PutUint64(tmp409[:], uint64(p.Nanos))
+	tmp354 = append(tmp354, tmp409[:8]...)
+	return tmp354, nil
 }
 func (s *PingBody) MustAppend(buf []byte) []byte {
 	var err error
@@ -1482,12 +1505,12 @@ func (s *PingBody) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (p *PingBody) Read(tmp352 io.Reader) error {
-	tmp419 := [8]uint8{}
-	if _, err := io.ReadFull(tmp352, tmp419[0:0+8]); err != nil {
+func (p *PingBody) Read(tmp356 io.Reader) error {
+	tmp397 := [8]uint8{}
+	if _, err := io.ReadFull(tmp356, tmp397[0:0+8]); err != nil {
 		return err
 	}
-	p.Nanos = binary.BigEndian.Uint64(tmp419[:])
+	p.Nanos = binary.BigEndian.Uint64(tmp397[:])
 	return nil
 }
 func (s *PingBody) DecodeCopy(buf []byte) ([]byte, error) {
@@ -1508,14 +1531,14 @@ func (s *PingBody) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (p *PingBody) DecodeSlice(tmp352 []byte, tmp352Offset *int) error {
-	tmp419 := []uint8{}
-	if len(tmp352)-*tmp352Offset < 8 {
+func (p *PingBody) DecodeSlice(tmp356 []byte, tmp356Offset *int) error {
+	tmp397 := []uint8{}
+	if len(tmp356)-*tmp356Offset < 8 {
 		return errors.New("not enough data to read for field \"PingBody::Nanos\"")
 	}
-	tmp419 = tmp352[*tmp352Offset : *tmp352Offset+8]
-	*tmp352Offset += int(8)
-	p.Nanos = binary.BigEndian.Uint64(tmp419[:])
+	tmp397 = tmp356[*tmp356Offset : *tmp356Offset+8]
+	*tmp356Offset += int(8)
+	p.Nanos = binary.BigEndian.Uint64(tmp397[:])
 	return nil
 }
 func (s *PingBody) Decode(buf []byte) ([]byte, error) {
@@ -1543,30 +1566,30 @@ type CloseBody struct {
 	Message    []uint8
 }
 
-func (c *CloseBody) SetMessage(tmp539 []uint8) bool {
-	if len(tmp539) > int(65535) {
+func (c *CloseBody) SetMessage(tmp543 []uint8) bool {
+	if len(tmp543) > int(65535) {
 		return false
 	}
-	c.MessageLen = uint16(len(tmp539))
-	c.Message = tmp539
+	c.MessageLen = uint16(len(tmp543))
+	c.Message = tmp543
 	return true
 }
 
-func (c *CloseBody) Write(tmp104 io.Writer) error {
-	tmp272 := [1]uint8{}
-	tmp272[0] = uint8(c.Status)
-	if _, err := tmp104.Write(tmp272[:1]); err != nil {
+func (c *CloseBody) Write(tmp108 io.Writer) error {
+	tmp281 := [1]uint8{}
+	tmp281[0] = uint8(c.Status)
+	if _, err := tmp108.Write(tmp281[:1]); err != nil {
 		return err
 	}
-	tmp544 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp544[:], uint16(c.MessageLen))
-	if _, err := tmp104.Write(tmp544[:2]); err != nil {
+	tmp548 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp548[:], uint16(c.MessageLen))
+	if _, err := tmp108.Write(tmp548[:2]); err != nil {
 		return err
 	}
 	if len(c.Message) != int(int(c.MessageLen)) {
 		return fmt.Errorf("size mismatch when writing field \"CloseBody::Message\": expected %d, got %d", int(int(c.MessageLen)), len(c.Message))
 	}
-	if _, err := tmp104.Write(c.Message); err != nil {
+	if _, err := tmp108.Write(c.Message); err != nil {
 		return err
 	}
 	return nil
@@ -1586,29 +1609,29 @@ func (s *CloseBody) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (c *CloseBody) EncodeSlice(tmp104 []byte, tmp104Offset *int) error {
-	tmp272 := []uint8{}
-	if len(tmp104)-*tmp104Offset < int(1) {
+func (c *CloseBody) EncodeSlice(tmp108 []byte, tmp108Offset *int) error {
+	tmp281 := []uint8{}
+	if len(tmp108)-*tmp108Offset < int(1) {
 		return errors.New("not enough space to reserve data for field \"CloseBody::Status\"")
 	}
-	tmp272 = tmp104[*tmp104Offset : *tmp104Offset+int(1)]
-	tmp272[0] = uint8(c.Status)
-	*tmp104Offset += int(1)
-	tmp544 := []uint8{}
-	if len(tmp104)-*tmp104Offset < int(2) {
+	tmp281 = tmp108[*tmp108Offset : *tmp108Offset+int(1)]
+	tmp281[0] = uint8(c.Status)
+	*tmp108Offset += int(1)
+	tmp548 := []uint8{}
+	if len(tmp108)-*tmp108Offset < int(2) {
 		return errors.New("not enough space to reserve data for field \"CloseBody::MessageLen\"")
 	}
-	tmp544 = tmp104[*tmp104Offset : *tmp104Offset+int(2)]
-	binary.BigEndian.PutUint16(tmp544[:], uint16(c.MessageLen))
-	*tmp104Offset += int(2)
+	tmp548 = tmp108[*tmp108Offset : *tmp108Offset+int(2)]
+	binary.BigEndian.PutUint16(tmp548[:], uint16(c.MessageLen))
+	*tmp108Offset += int(2)
 	if len(c.Message) != int(int(c.MessageLen)) {
 		return fmt.Errorf("size mismatch when writing field \"CloseBody::Message\": expected %d, got %d", int(int(c.MessageLen)), len(c.Message))
 	}
-	if len(tmp104)-*tmp104Offset < int(0+int(c.MessageLen)) {
+	if len(tmp108)-*tmp108Offset < int(0+int(c.MessageLen)) {
 		return errors.New("not enough space to write for field \"CloseBody::Message\"")
 	}
-	copy(tmp104[*tmp104Offset:*tmp104Offset+int(int(c.MessageLen))], c.Message)
-	*tmp104Offset += int(int(c.MessageLen))
+	copy(tmp108[*tmp108Offset:*tmp108Offset+int(int(c.MessageLen))], c.Message)
+	*tmp108Offset += int(int(c.MessageLen))
 	return nil
 }
 func (s *CloseBody) Encode(buf []byte) ([]byte, error) {
@@ -1626,18 +1649,18 @@ func (s *CloseBody) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (c *CloseBody) Append(tmp104 []byte) ([]byte, error) {
-	tmp272 := [1]uint8{}
-	tmp272[0] = uint8(c.Status)
-	tmp104 = append(tmp104, tmp272[:1]...)
-	tmp544 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp544[:], uint16(c.MessageLen))
-	tmp104 = append(tmp104, tmp544[:2]...)
+func (c *CloseBody) Append(tmp108 []byte) ([]byte, error) {
+	tmp281 := [1]uint8{}
+	tmp281[0] = uint8(c.Status)
+	tmp108 = append(tmp108, tmp281[:1]...)
+	tmp548 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp548[:], uint16(c.MessageLen))
+	tmp108 = append(tmp108, tmp548[:2]...)
 	if len(c.Message) != int(int(c.MessageLen)) {
 		return nil, fmt.Errorf("size mismatch when writing field \"CloseBody::Message\": expected %d, got %d", int(int(c.MessageLen)), len(c.Message))
 	}
-	tmp104 = append(tmp104, c.Message...)
-	return tmp104, nil
+	tmp108 = append(tmp108, c.Message...)
+	return tmp108, nil
 }
 func (s *CloseBody) MustAppend(buf []byte) []byte {
 	var err error
@@ -1648,20 +1671,20 @@ func (s *CloseBody) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (c *CloseBody) Read(tmp105 io.Reader) error {
-	tmp552 := uint8(0)
-	tmp38 := [1]uint8{}
-	if _, err := io.ReadFull(tmp105, tmp38[0:0+1]); err != nil {
+func (c *CloseBody) Read(tmp109 io.Reader) error {
+	tmp558 := uint8(0)
+	tmp37 := [1]uint8{}
+	if _, err := io.ReadFull(tmp109, tmp37[0:0+1]); err != nil {
 		return err
 	}
-	tmp552 = tmp38[0]
-	c.Status = CloseStatus(tmp552)
-	tmp550 := [2]uint8{}
-	if _, err := io.ReadFull(tmp105, tmp550[0:0+2]); err != nil {
+	tmp558 = tmp37[0]
+	c.Status = CloseStatus(tmp558)
+	tmp555 := [2]uint8{}
+	if _, err := io.ReadFull(tmp109, tmp555[0:0+2]); err != nil {
 		return err
 	}
-	c.MessageLen = binary.BigEndian.Uint16(tmp550[:])
-	if seeker, ok := tmp105.(io.Seeker); ok {
+	c.MessageLen = binary.BigEndian.Uint16(tmp555[:])
+	if seeker, ok := tmp109.(io.Seeker); ok {
 		current, err := seeker.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return err
@@ -1678,17 +1701,17 @@ func (c *CloseBody) Read(tmp105 io.Reader) error {
 			return fmt.Errorf("Too large length requested: %d < %d", endOffset-current, int64(int(c.MessageLen)))
 		}
 		c.Message = make([]byte, int(c.MessageLen))
-		if _, err := io.ReadFull(tmp105, c.Message[0:0+int(c.MessageLen)]); err != nil {
+		if _, err := io.ReadFull(tmp109, c.Message[0:0+int(c.MessageLen)]); err != nil {
 			return err
 		}
 	} else {
 		// To mitigate DoS attack, use incremental buffer allocation
 		// for more performance, use (assert on DSL or safe-len-limit option) and trust-input-len option
-		io_temp_1223 := bytes.NewBuffer(nil)
-		if _, err := io.CopyN(io_temp_1223, tmp105, int64(int(c.MessageLen))); err != nil {
+		io_temp_1247 := bytes.NewBuffer(nil)
+		if _, err := io.CopyN(io_temp_1247, tmp109, int64(int(c.MessageLen))); err != nil {
 			return err
 		}
-		c.Message = io_temp_1223.Bytes()
+		c.Message = io_temp_1247.Bytes()
 	}
 	return nil
 }
@@ -1710,28 +1733,28 @@ func (s *CloseBody) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (c *CloseBody) DecodeSlice(tmp105 []byte, tmp105Offset *int) error {
-	tmp552 := uint8(0)
-	tmp38 := []uint8{}
-	if len(tmp105)-*tmp105Offset < 1 {
+func (c *CloseBody) DecodeSlice(tmp109 []byte, tmp109Offset *int) error {
+	tmp558 := uint8(0)
+	tmp37 := []uint8{}
+	if len(tmp109)-*tmp109Offset < 1 {
 		return errors.New("not enough data to read for field \"CloseBody::Status\"")
 	}
-	tmp38 = tmp105[*tmp105Offset : *tmp105Offset+1]
-	*tmp105Offset += int(1)
-	tmp552 = tmp38[0]
-	c.Status = CloseStatus(tmp552)
-	tmp550 := []uint8{}
-	if len(tmp105)-*tmp105Offset < 2 {
+	tmp37 = tmp109[*tmp109Offset : *tmp109Offset+1]
+	*tmp109Offset += int(1)
+	tmp558 = tmp37[0]
+	c.Status = CloseStatus(tmp558)
+	tmp555 := []uint8{}
+	if len(tmp109)-*tmp109Offset < 2 {
 		return errors.New("not enough data to read for field \"CloseBody::MessageLen\"")
 	}
-	tmp550 = tmp105[*tmp105Offset : *tmp105Offset+2]
-	*tmp105Offset += int(2)
-	c.MessageLen = binary.BigEndian.Uint16(tmp550[:])
-	if len(tmp105)-*tmp105Offset < int(c.MessageLen) {
+	tmp555 = tmp109[*tmp109Offset : *tmp109Offset+2]
+	*tmp109Offset += int(2)
+	c.MessageLen = binary.BigEndian.Uint16(tmp555[:])
+	if len(tmp109)-*tmp109Offset < int(c.MessageLen) {
 		return errors.New("not enough data to read for field \"CloseBody::Message\"")
 	}
-	c.Message = tmp105[*tmp105Offset : *tmp105Offset+int(c.MessageLen)]
-	*tmp105Offset += int(int(c.MessageLen))
+	c.Message = tmp109[*tmp109Offset : *tmp109Offset+int(c.MessageLen)]
+	*tmp109Offset += int(int(c.MessageLen))
 	return nil
 }
 func (s *CloseBody) Decode(buf []byte) ([]byte, error) {
@@ -1792,15 +1815,15 @@ type PacketHeader struct {
 	Kind ApplicationPayloadKind
 }
 
-func (p *PacketHeader) Write(tmp247 io.Writer) error {
-	tmp247ByteIO, _ := tmp247.(io.ByteWriter)
-	_ = tmp247ByteIO
-	if tmp247ByteIO != nil {
-		if err := tmp247ByteIO.WriteByte(uint8(p.Kind)); err != nil {
+func (p *PacketHeader) Write(tmp205 io.Writer) error {
+	tmp205ByteIO, _ := tmp205.(io.ByteWriter)
+	_ = tmp205ByteIO
+	if tmp205ByteIO != nil {
+		if err := tmp205ByteIO.WriteByte(uint8(p.Kind)); err != nil {
 			return err
 		}
 	} else {
-		if _, err := tmp247.Write([]byte{uint8(p.Kind)}); err != nil {
+		if _, err := tmp205.Write([]byte{uint8(p.Kind)}); err != nil {
 			return err
 		}
 	}
@@ -1821,14 +1844,14 @@ func (s *PacketHeader) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (p *PacketHeader) EncodeSlice(tmp247 []byte, tmp247Offset *int) error {
-	tmp529 := []uint8{}
-	if len(tmp247)-*tmp247Offset < int(1) {
+func (p *PacketHeader) EncodeSlice(tmp205 []byte, tmp205Offset *int) error {
+	tmp532 := []uint8{}
+	if len(tmp205)-*tmp205Offset < int(1) {
 		return errors.New("not enough space to reserve data for field \"PacketHeader::Kind\"")
 	}
-	tmp529 = tmp247[*tmp247Offset : *tmp247Offset+int(1)]
-	tmp529[0] = uint8(p.Kind)
-	*tmp247Offset += int(1)
+	tmp532 = tmp205[*tmp205Offset : *tmp205Offset+int(1)]
+	tmp532[0] = uint8(p.Kind)
+	*tmp205Offset += int(1)
 	return nil
 }
 func (s *PacketHeader) Encode(buf []byte) ([]byte, error) {
@@ -1846,11 +1869,11 @@ func (s *PacketHeader) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (p *PacketHeader) Append(tmp247 []byte) ([]byte, error) {
-	tmp529 := [1]uint8{}
-	tmp529[0] = uint8(p.Kind)
-	tmp247 = append(tmp247, tmp529[:1]...)
-	return tmp247, nil
+func (p *PacketHeader) Append(tmp205 []byte) ([]byte, error) {
+	tmp532 := [1]uint8{}
+	tmp532[0] = uint8(p.Kind)
+	tmp205 = append(tmp205, tmp532[:1]...)
+	return tmp205, nil
 }
 func (s *PacketHeader) MustAppend(buf []byte) []byte {
 	var err error
@@ -1861,13 +1884,13 @@ func (s *PacketHeader) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (p *PacketHeader) Read(tmp250 io.Reader) error {
-	tmp250ByteIO, _ := tmp250.(io.ByteReader)
-	_ = tmp250ByteIO
-	tmp534 := uint8(0)
-	if tmp250ByteIO != nil {
+func (p *PacketHeader) Read(tmp207 io.Reader) error {
+	tmp207ByteIO, _ := tmp207.(io.ByteReader)
+	_ = tmp207ByteIO
+	tmp538 := uint8(0)
+	if tmp207ByteIO != nil {
 		var err error
-		tmp534, err = tmp250ByteIO.ReadByte()
+		tmp538, err = tmp207ByteIO.ReadByte()
 		if err != nil {
 			return err
 		}
@@ -1875,15 +1898,15 @@ func (p *PacketHeader) Read(tmp250 io.Reader) error {
 		var err error
 		var n int
 		buf := [1]byte{0}
-		if n, err = io.ReadFull(tmp250, buf[:]); err != nil {
+		if n, err = io.ReadFull(tmp207, buf[:]); err != nil {
 			return err
 		}
 		if n != 1 {
 			return fmt.Errorf("failed to read byte for field \"PacketHeader::Kind\": expected to read 1 byte, but read %d bytes", n)
 		}
-		tmp534 = buf[0]
+		tmp538 = buf[0]
 	}
-	p.Kind = ApplicationPayloadKind(tmp534)
+	p.Kind = ApplicationPayloadKind(tmp538)
 	return nil
 }
 func (s *PacketHeader) DecodeCopy(buf []byte) ([]byte, error) {
@@ -1904,16 +1927,16 @@ func (s *PacketHeader) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (p *PacketHeader) DecodeSlice(tmp250 []byte, tmp250Offset *int) error {
-	tmp534 := uint8(0)
-	tmp533 := []uint8{}
-	if len(tmp250)-*tmp250Offset < 1 {
+func (p *PacketHeader) DecodeSlice(tmp207 []byte, tmp207Offset *int) error {
+	tmp538 := uint8(0)
+	tmp537 := []uint8{}
+	if len(tmp207)-*tmp207Offset < 1 {
 		return errors.New("not enough data to read for field \"PacketHeader::Kind\"")
 	}
-	tmp533 = tmp250[*tmp250Offset : *tmp250Offset+1]
-	*tmp250Offset += int(1)
-	tmp534 = tmp533[0]
-	p.Kind = ApplicationPayloadKind(tmp534)
+	tmp537 = tmp207[*tmp207Offset : *tmp207Offset+1]
+	*tmp207Offset += int(1)
+	tmp538 = tmp537[0]
+	p.Kind = ApplicationPayloadKind(tmp538)
 	return nil
 }
 func (s *PacketHeader) Decode(buf []byte) ([]byte, error) {
@@ -1936,60 +1959,60 @@ func (s *PacketHeader) DecodeExact(buf []byte) error {
 }
 
 func IsStreamRelated(Kind ApplicationPayloadKind) bool {
-	tmp343 := false
+	tmp347 := false
 	if (((ApplicationPayloadKind_StreamData == Kind) || (ApplicationPayloadKind_StreamCancel == Kind)) || (ApplicationPayloadKind_StreamAck == Kind)) || (ApplicationPayloadKind_StreamWindowUpdate == Kind) {
-		tmp343 = true
+		tmp347 = true
 	} else {
-		tmp343 = false
+		tmp347 = false
 	}
-	return tmp343
+	return tmp347
 }
 
-type tmp518 struct {
+type tmp521 struct {
 	StreamData StreamPacket
 }
 
-type tmp516 struct {
+type tmp519 struct {
 	StreamCancel CancelStreamPacket
 }
 
-type tmp514 struct {
+type tmp517 struct {
 	StreamAck StreamACKPacket
 }
 
-type tmp512 struct {
+type tmp515 struct {
 	WindowUpdate UpdateWindow
 }
 
-type tmp1114 struct {
+type tmp1138 struct {
 }
 
-type Variant102 struct {
-	tmp518  tmp518
-	tmp516  tmp516
-	tmp514  tmp514
-	tmp512  tmp512
-	tmp1114 tmp1114
+type Variant106 struct {
+	tmp521  tmp521
+	tmp519  tmp519
+	tmp517  tmp517
+	tmp515  tmp515
+	tmp1138 tmp1138
 }
 
 type StreamAppPacket struct {
 	Header PacketHeader
-	tmp342 Variant102
+	tmp346 Variant106
 }
 
 func (s *StreamAppPacket) StreamAck() *StreamACKPacket {
 	if (ApplicationPayloadKind_StreamData == s.Header.Kind) || (ApplicationPayloadKind_StreamCancel == s.Header.Kind) {
 		return nil
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamAck {
-		return &s.tmp342.tmp514.StreamAck
+		return &s.tmp346.tmp517.StreamAck
 	}
 	return nil
 }
-func (s *StreamAppPacket) SetStreamAck(tmp442 StreamACKPacket) bool {
+func (s *StreamAppPacket) SetStreamAck(tmp445 StreamACKPacket) bool {
 	if (ApplicationPayloadKind_StreamData == s.Header.Kind) || (ApplicationPayloadKind_StreamCancel == s.Header.Kind) {
 		return false
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamAck {
-		s.tmp342.tmp514.StreamAck = tmp442
+		s.tmp346.tmp517.StreamAck = tmp445
 		return true
 	}
 	return false
@@ -1999,15 +2022,15 @@ func (s *StreamAppPacket) StreamCancel() *CancelStreamPacket {
 	if s.Header.Kind == ApplicationPayloadKind_StreamData {
 		return nil
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamCancel {
-		return &s.tmp342.tmp516.StreamCancel
+		return &s.tmp346.tmp519.StreamCancel
 	}
 	return nil
 }
-func (s *StreamAppPacket) SetStreamCancel(tmp439 CancelStreamPacket) bool {
+func (s *StreamAppPacket) SetStreamCancel(tmp442 CancelStreamPacket) bool {
 	if s.Header.Kind == ApplicationPayloadKind_StreamData {
 		return false
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamCancel {
-		s.tmp342.tmp516.StreamCancel = tmp439
+		s.tmp346.tmp519.StreamCancel = tmp442
 		return true
 	}
 	return false
@@ -2015,13 +2038,13 @@ func (s *StreamAppPacket) SetStreamCancel(tmp439 CancelStreamPacket) bool {
 
 func (s *StreamAppPacket) StreamData() *StreamPacket {
 	if s.Header.Kind == ApplicationPayloadKind_StreamData {
-		return &s.tmp342.tmp518.StreamData
+		return &s.tmp346.tmp521.StreamData
 	}
 	return nil
 }
-func (s *StreamAppPacket) SetStreamData(tmp436 StreamPacket) bool {
+func (s *StreamAppPacket) SetStreamData(tmp439 StreamPacket) bool {
 	if s.Header.Kind == ApplicationPayloadKind_StreamData {
-		s.tmp342.tmp518.StreamData = tmp436
+		s.tmp346.tmp521.StreamData = tmp439
 		return true
 	}
 	return false
@@ -2031,47 +2054,47 @@ func (s *StreamAppPacket) WindowUpdate() *UpdateWindow {
 	if ((ApplicationPayloadKind_StreamData == s.Header.Kind) || (ApplicationPayloadKind_StreamCancel == s.Header.Kind)) || (ApplicationPayloadKind_StreamAck == s.Header.Kind) {
 		return nil
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamWindowUpdate {
-		return &s.tmp342.tmp512.WindowUpdate
+		return &s.tmp346.tmp515.WindowUpdate
 	}
 	return nil
 }
-func (s *StreamAppPacket) SetWindowUpdate(tmp425 UpdateWindow) bool {
+func (s *StreamAppPacket) SetWindowUpdate(tmp428 UpdateWindow) bool {
 	if ((ApplicationPayloadKind_StreamData == s.Header.Kind) || (ApplicationPayloadKind_StreamCancel == s.Header.Kind)) || (ApplicationPayloadKind_StreamAck == s.Header.Kind) {
 		return false
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamWindowUpdate {
-		s.tmp342.tmp512.WindowUpdate = tmp425
+		s.tmp346.tmp515.WindowUpdate = tmp428
 		return true
 	}
 	return false
 }
 
-func (s *StreamAppPacket) Write(tmp120 io.Writer) error {
-	tmp120ByteIO, _ := tmp120.(io.ByteWriter)
-	_ = tmp120ByteIO
+func (s *StreamAppPacket) Write(tmp122 io.Writer) error {
+	tmp122ByteIO, _ := tmp122.(io.ByteWriter)
+	_ = tmp122ByteIO
 	/* config.go.union("noheap")*/
-	tmp471 := s.Header.Write(tmp120)
-	if tmp471 != nil {
-		return tmp471
+	tmp474 := s.Header.Write(tmp122)
+	if tmp474 != nil {
+		return tmp474
 	}
 	if s.Header.Kind == ApplicationPayloadKind_StreamData {
-		tmp467 := s.tmp342.tmp518.StreamData.Write(tmp120)
-		if tmp467 != nil {
-			return tmp467
+		tmp470 := s.tmp346.tmp521.StreamData.Write(tmp122)
+		if tmp470 != nil {
+			return tmp470
 		}
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamCancel {
-		tmp462 := s.tmp342.tmp516.StreamCancel.Write(tmp120)
-		if tmp462 != nil {
-			return tmp462
+		tmp465 := s.tmp346.tmp519.StreamCancel.Write(tmp122)
+		if tmp465 != nil {
+			return tmp465
 		}
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamAck {
-		tmp457 := s.tmp342.tmp514.StreamAck.Write(tmp120)
-		if tmp457 != nil {
-			return tmp457
+		tmp460 := s.tmp346.tmp517.StreamAck.Write(tmp122)
+		if tmp460 != nil {
+			return tmp460
 		}
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamWindowUpdate {
-		tmp452 := s.tmp342.tmp512.WindowUpdate.Write(tmp120)
-		if tmp452 != nil {
-			return tmp452
+		tmp455 := s.tmp346.tmp515.WindowUpdate.Write(tmp122)
+		if tmp455 != nil {
+			return tmp455
 		}
 	} else {
 		return errors.New("Unexpected packet")
@@ -2093,31 +2116,31 @@ func (s *StreamAppPacket) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (s *StreamAppPacket) EncodeSlice(tmp120 []byte, tmp120Offset *int) error {
+func (s *StreamAppPacket) EncodeSlice(tmp122 []byte, tmp122Offset *int) error {
 	/* config.go.union("noheap")*/
-	tmp471 := s.Header.EncodeSlice(tmp120, tmp120Offset)
-	if tmp471 != nil {
-		return tmp471
+	tmp474 := s.Header.EncodeSlice(tmp122, tmp122Offset)
+	if tmp474 != nil {
+		return tmp474
 	}
 	if s.Header.Kind == ApplicationPayloadKind_StreamData {
-		tmp467 := s.tmp342.tmp518.StreamData.EncodeSlice(tmp120, tmp120Offset)
-		if tmp467 != nil {
-			return tmp467
+		tmp470 := s.tmp346.tmp521.StreamData.EncodeSlice(tmp122, tmp122Offset)
+		if tmp470 != nil {
+			return tmp470
 		}
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamCancel {
-		tmp462 := s.tmp342.tmp516.StreamCancel.EncodeSlice(tmp120, tmp120Offset)
-		if tmp462 != nil {
-			return tmp462
+		tmp465 := s.tmp346.tmp519.StreamCancel.EncodeSlice(tmp122, tmp122Offset)
+		if tmp465 != nil {
+			return tmp465
 		}
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamAck {
-		tmp457 := s.tmp342.tmp514.StreamAck.EncodeSlice(tmp120, tmp120Offset)
-		if tmp457 != nil {
-			return tmp457
+		tmp460 := s.tmp346.tmp517.StreamAck.EncodeSlice(tmp122, tmp122Offset)
+		if tmp460 != nil {
+			return tmp460
 		}
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamWindowUpdate {
-		tmp452 := s.tmp342.tmp512.WindowUpdate.EncodeSlice(tmp120, tmp120Offset)
-		if tmp452 != nil {
-			return tmp452
+		tmp455 := s.tmp346.tmp515.WindowUpdate.EncodeSlice(tmp122, tmp122Offset)
+		if tmp455 != nil {
+			return tmp455
 		}
 	} else {
 		return errors.New("Unexpected packet")
@@ -2139,46 +2162,46 @@ func (s *StreamAppPacket) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (s *StreamAppPacket) Append(tmp120 []byte) ([]byte, error) {
+func (s *StreamAppPacket) Append(tmp122 []byte) ([]byte, error) {
 	/* config.go.union("noheap")*/
-	var tmp471 error
-	tmp120, tmp471 = s.Header.Append(tmp120)
+	var tmp474 error
+	tmp122, tmp474 = s.Header.Append(tmp122)
 
-	if tmp471 != nil {
-		return nil, tmp471
+	if tmp474 != nil {
+		return nil, tmp474
 	}
 	if s.Header.Kind == ApplicationPayloadKind_StreamData {
-		var tmp467 error
-		tmp120, tmp467 = s.tmp342.tmp518.StreamData.Append(tmp120)
+		var tmp470 error
+		tmp122, tmp470 = s.tmp346.tmp521.StreamData.Append(tmp122)
 
-		if tmp467 != nil {
-			return nil, tmp467
+		if tmp470 != nil {
+			return nil, tmp470
 		}
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamCancel {
-		var tmp462 error
-		tmp120, tmp462 = s.tmp342.tmp516.StreamCancel.Append(tmp120)
+		var tmp465 error
+		tmp122, tmp465 = s.tmp346.tmp519.StreamCancel.Append(tmp122)
 
-		if tmp462 != nil {
-			return nil, tmp462
+		if tmp465 != nil {
+			return nil, tmp465
 		}
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamAck {
-		var tmp457 error
-		tmp120, tmp457 = s.tmp342.tmp514.StreamAck.Append(tmp120)
+		var tmp460 error
+		tmp122, tmp460 = s.tmp346.tmp517.StreamAck.Append(tmp122)
 
-		if tmp457 != nil {
-			return nil, tmp457
+		if tmp460 != nil {
+			return nil, tmp460
 		}
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamWindowUpdate {
-		var tmp452 error
-		tmp120, tmp452 = s.tmp342.tmp512.WindowUpdate.Append(tmp120)
+		var tmp455 error
+		tmp122, tmp455 = s.tmp346.tmp515.WindowUpdate.Append(tmp122)
 
-		if tmp452 != nil {
-			return nil, tmp452
+		if tmp455 != nil {
+			return nil, tmp455
 		}
 	} else {
 		return nil, errors.New("Unexpected packet")
 	}
-	return tmp120, nil
+	return tmp122, nil
 }
 func (s *StreamAppPacket) MustAppend(buf []byte) []byte {
 	var err error
@@ -2189,33 +2212,33 @@ func (s *StreamAppPacket) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (s *StreamAppPacket) Read(tmp121 io.Reader) error {
-	tmp121ByteIO, _ := tmp121.(io.ByteReader)
-	_ = tmp121ByteIO
+func (s *StreamAppPacket) Read(tmp124 io.Reader) error {
+	tmp124ByteIO, _ := tmp124.(io.ByteReader)
+	_ = tmp124ByteIO
 	/* config.go.union("noheap")*/
-	tmp502 := s.Header.Read(tmp121)
-	if tmp502 != nil {
-		return tmp502
+	tmp505 := s.Header.Read(tmp124)
+	if tmp505 != nil {
+		return tmp505
 	}
 	if s.Header.Kind == ApplicationPayloadKind_StreamData {
-		tmp497 := s.tmp342.tmp518.StreamData.Read(tmp121)
-		if tmp497 != nil {
-			return tmp497
+		tmp500 := s.tmp346.tmp521.StreamData.Read(tmp124)
+		if tmp500 != nil {
+			return tmp500
 		}
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamCancel {
-		tmp491 := s.tmp342.tmp516.StreamCancel.Read(tmp121)
-		if tmp491 != nil {
-			return tmp491
+		tmp494 := s.tmp346.tmp519.StreamCancel.Read(tmp124)
+		if tmp494 != nil {
+			return tmp494
 		}
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamAck {
-		tmp485 := s.tmp342.tmp514.StreamAck.Read(tmp121)
-		if tmp485 != nil {
-			return tmp485
+		tmp488 := s.tmp346.tmp517.StreamAck.Read(tmp124)
+		if tmp488 != nil {
+			return tmp488
 		}
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamWindowUpdate {
-		tmp479 := s.tmp342.tmp512.WindowUpdate.Read(tmp121)
-		if tmp479 != nil {
-			return tmp479
+		tmp482 := s.tmp346.tmp515.WindowUpdate.Read(tmp124)
+		if tmp482 != nil {
+			return tmp482
 		}
 	} else {
 		return errors.New("Unexpected packet")
@@ -2240,31 +2263,31 @@ func (s *StreamAppPacket) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (s *StreamAppPacket) DecodeSlice(tmp121 []byte, tmp121Offset *int) error {
+func (s *StreamAppPacket) DecodeSlice(tmp124 []byte, tmp124Offset *int) error {
 	/* config.go.union("noheap")*/
-	tmp502 := s.Header.DecodeSlice(tmp121, tmp121Offset)
-	if tmp502 != nil {
-		return tmp502
+	tmp505 := s.Header.DecodeSlice(tmp124, tmp124Offset)
+	if tmp505 != nil {
+		return tmp505
 	}
 	if s.Header.Kind == ApplicationPayloadKind_StreamData {
-		tmp497 := s.tmp342.tmp518.StreamData.DecodeSlice(tmp121, tmp121Offset)
-		if tmp497 != nil {
-			return tmp497
+		tmp500 := s.tmp346.tmp521.StreamData.DecodeSlice(tmp124, tmp124Offset)
+		if tmp500 != nil {
+			return tmp500
 		}
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamCancel {
-		tmp491 := s.tmp342.tmp516.StreamCancel.DecodeSlice(tmp121, tmp121Offset)
-		if tmp491 != nil {
-			return tmp491
+		tmp494 := s.tmp346.tmp519.StreamCancel.DecodeSlice(tmp124, tmp124Offset)
+		if tmp494 != nil {
+			return tmp494
 		}
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamAck {
-		tmp485 := s.tmp342.tmp514.StreamAck.DecodeSlice(tmp121, tmp121Offset)
-		if tmp485 != nil {
-			return tmp485
+		tmp488 := s.tmp346.tmp517.StreamAck.DecodeSlice(tmp124, tmp124Offset)
+		if tmp488 != nil {
+			return tmp488
 		}
 	} else if s.Header.Kind == ApplicationPayloadKind_StreamWindowUpdate {
-		tmp479 := s.tmp342.tmp512.WindowUpdate.DecodeSlice(tmp121, tmp121Offset)
-		if tmp479 != nil {
-			return tmp479
+		tmp482 := s.tmp346.tmp515.WindowUpdate.DecodeSlice(tmp124, tmp124Offset)
+		if tmp482 != nil {
+			return tmp482
 		}
 	} else {
 		return errors.New("Unexpected packet")

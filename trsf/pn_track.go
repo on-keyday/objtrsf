@@ -2,6 +2,7 @@ package trsf
 
 import (
 	"sync"
+	"time"
 )
 
 type Range struct {
@@ -11,7 +12,19 @@ type Range struct {
 type PacketNumTracker struct {
 	m             sync.Mutex
 	unackedRanges []Range
-	recvAdded     chan struct{}
+	// largestAt is when the highest packet number still waiting to be
+	// acknowledged was processed, and largestPN which one that is. The pair
+	// exists so the ACK can report how long this receiver held it — RFC 9002's
+	// ack_delay, which the peer subtracts from its RTT sample.
+	//
+	// It is a LOWER BOUND on the true delay: the clock starts when the run loop
+	// takes the packet off the receive queue, so any dwell before that is not
+	// counted. Understating it is the safe direction — the peer's guard only
+	// subtracts a delay that leaves the sample above its own min_rtt.
+	largestPN   uint64
+	largestAt   time.Time
+	haveLargest bool
+	recvAdded   chan struct{}
 }
 
 func NewPacketNumTracker() *PacketNumTracker {
@@ -35,6 +48,9 @@ func (rc *PacketNumTracker) notify() {
 func (rc *PacketNumTracker) InsertUnacked(seqNum uint64) {
 	rc.m.Lock()
 	defer rc.m.Unlock()
+	if !rc.haveLargest || seqNum > rc.largestPN {
+		rc.largestPN, rc.largestAt, rc.haveLargest = seqNum, time.Now(), true
+	}
 	if len(rc.unackedRanges) == 0 {
 		rc.unackedRanges = append(rc.unackedRanges, Range{Begin: seqNum, End: seqNum + 1})
 		rc.notify()
@@ -77,10 +93,20 @@ func (rc *PacketNumTracker) InsertUnacked(seqNum uint64) {
 	}
 }
 
-func (rc *PacketNumTracker) GenerateACK() []Range {
+// GenerateACK takes the pending ranges and, with them, how long the largest of
+// them has been held. The caller turns that into the wire's ack_delay.
+//
+// Both are cleared: the next ACK covers packets that arrive after this one, and
+// a stale largestAt would report a delay for a packet already acknowledged.
+func (rc *PacketNumTracker) GenerateACK() ([]Range, time.Duration) {
 	rc.m.Lock()
 	defer rc.m.Unlock()
 	ranges := rc.unackedRanges
 	rc.unackedRanges = nil
-	return ranges
+	var held time.Duration
+	if rc.haveLargest {
+		held = time.Since(rc.largestAt)
+		rc.haveLargest = false
+	}
+	return ranges, held
 }

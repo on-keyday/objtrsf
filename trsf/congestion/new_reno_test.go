@@ -104,3 +104,72 @@ func TestRepeatedLossesDecreaseMonotonically(t *testing.T) {
 		prev = got
 	}
 }
+
+// RFC 9002 5.2 and 5.3, checked against the text rather than from memory.
+//
+//	5.2  "An endpoint uses only locally observed times in computing the min_rtt
+//	      and does not adjust for acknowledgment delays reported by the peer."
+//	5.3  first sample: smoothed_rtt = latest_rtt, rttvar = latest_rtt / 2
+//	     otherwise:    if (latest_rtt >= min_rtt + ack_delay):
+//	                       adjusted_rtt = latest_rtt - ack_delay
+//
+// Getting 5.2 backwards is the quiet mistake: min_rtt would sink below anything
+// the path can do, and srtt - min_rtt, which this project reads as queueing
+// delay, would stop meaning that.
+func TestUpdateRTTFollowsRFC9002(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	rtt := NewRTTStats(10 * time.Millisecond)
+	now := time.Now()
+
+	// 5.3 first sample: the RAW latest_rtt, even though a delay was reported.
+	rtt.UpdateRTT(logger, 50*time.Millisecond, 20*time.Millisecond, now)
+	if rtt.MinRTT != 50*time.Millisecond {
+		t.Errorf("MinRTT = %v, want the raw 50ms (5.2)", rtt.MinRTT)
+	}
+	if rtt.SRTT != 50*time.Millisecond {
+		t.Errorf("SRTT = %v, want the raw 50ms on the first sample (5.3)", rtt.SRTT)
+	}
+
+	// A faster sample lowers min_rtt, from the raw value.
+	rtt.UpdateRTT(logger, 10*time.Millisecond, 0, now)
+	if rtt.MinRTT != 10*time.Millisecond {
+		t.Fatalf("MinRTT = %v, want 10ms", rtt.MinRTT)
+	}
+	want := (7*50*time.Millisecond + 10*time.Millisecond) / 8
+	if rtt.SRTT != want {
+		t.Errorf("SRTT = %v, want %v", rtt.SRTT, want)
+	}
+
+	// 5.3 subtraction: 60 >= 10 + 20, so the peer's 20ms comes out of the
+	// sample — and NOT out of min_rtt, which stays at the raw 10ms.
+	before := rtt.SRTT
+	rtt.UpdateRTT(logger, 60*time.Millisecond, 20*time.Millisecond, now)
+	if rtt.MinRTT != 10*time.Millisecond {
+		t.Errorf("MinRTT = %v: an adjusted sample moved it (5.2 says it must not)", rtt.MinRTT)
+	}
+	if rtt.LatestRTT != 60*time.Millisecond {
+		t.Errorf("LatestRTT = %v, want the raw 60ms", rtt.LatestRTT)
+	}
+	if want := (7*before + 40*time.Millisecond) / 8; rtt.SRTT != want {
+		t.Errorf("SRTT = %v, want %v — 60ms less the peer's 20ms", rtt.SRTT, want)
+	}
+
+	// The guard: 25 >= 10 + 20 is false, so nothing is subtracted. There is no
+	// negotiated max_ack_delay on this transport, so this is the only thing
+	// standing between a peer's number and this sender's timers.
+	before = rtt.SRTT
+	rtt.UpdateRTT(logger, 25*time.Millisecond, 20*time.Millisecond, now)
+	if want := (7*before + 25*time.Millisecond) / 8; rtt.SRTT != want {
+		t.Errorf("SRTT = %v, want %v — the delay must be ignored, not applied", rtt.SRTT, want)
+	}
+}
+
+// A peer that reports no delay must behave exactly as before the field existed.
+func TestUpdateRTTWithZeroAckDelayIsUnchanged(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	rtt := NewRTTStats(10 * time.Millisecond)
+	rtt.UpdateRTT(logger, 40*time.Millisecond, 0, time.Now())
+	if rtt.SRTT != 40*time.Millisecond || rtt.MinRTT != 40*time.Millisecond {
+		t.Errorf("SRTT=%v MinRTT=%v, want both 40ms", rtt.SRTT, rtt.MinRTT)
+	}
+}

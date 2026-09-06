@@ -459,12 +459,12 @@ func (s *Streams) handlePacket(recvData *objproto.Message) {
 			s.scheduleRecvStreamRemoval(rs)
 		}
 	} else if ack := pkt.StreamAck(); ack != nil {
-		ranges, err := ParseTransferACK(ack)
+		ranges, ackDelay, err := ParseTransferACK(ack)
 		if err != nil {
 			s.logger.Error("failed to parse transfer ack", "error", err)
 			return
 		}
-		err = s.sh.ReceiveACK(time.Now(), ranges)
+		err = s.sh.ReceiveACK(time.Now(), ranges, ackDelay)
 		if err != nil {
 			s.logger.Error("failed to handle received ack", "error", err)
 		}
@@ -674,10 +674,14 @@ func (s *Streams) run(ctx context.Context) {
 				s.logger.Debug("loss detection fired")
 			}
 		}
-		ackRanges := s.pt.GenerateACK()
+		// The delay is measured HERE, one step before the packet is encoded.
+		// What it cannot include is the hop from this queue to the socket, which
+		// another goroutine makes — so ack_delay understates, in the direction
+		// the peer's own guard tolerates.
+		ackRanges, ackHeld := s.pt.GenerateACK()
 		var ack []byte
 		if len(ackRanges) > 0 {
-			ackPkt, err := TransferACK(ackRanges)
+			ackPkt, err := TransferACK(ackRanges, ackHeld)
 			if err != nil {
 				s.logger.Error("failed to create transfer ack", "error", err)
 			} else {
