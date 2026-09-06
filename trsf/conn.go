@@ -121,6 +121,34 @@ type Streams struct {
 	// this counter far faster than a healthy loop driven by I/O notifications.
 	loopIter atomic.Uint64
 
+	// Where the loop's wall-clock actually goes. loopIter says how FAST the
+	// loop turns; these say why it is not turning faster, which is a different
+	// question and the one a transfer running far below its congestion window
+	// poses. Measured on a 2 ms path: ~1,850 iterations/s at one packet each,
+	// 540 µs per packet, on a host 79% idle — the loop was not computing, and
+	// nothing here could say what it was waiting for.
+	//
+	// blocks counts parks ENTERED and blockedNs accumulates on the wake, so a
+	// loop still parked reads blocks=N, blockedNs unchanged. Deliberate: a
+	// stopped loop is already what a frozen loopIter says, and paying for an
+	// in-progress duration would mean a clock read per reader instead of per
+	// park.
+	//
+	// wakeTimer and wakeSend are the two arms the diagnosis turns on — a park
+	// ended by the timer is the transport waiting on a deadline of its own, one
+	// ended by the send trigger is the application not feeding it. Everything
+	// else (an inbound packet, an ACK to send, a window update, a cancel) is
+	// the remainder, blocks - wakeTimer - wakeSend, and means the peer.
+	//
+	// armedPacer splits the timer arm: the pacer's own floor is 1 ms, so a loop
+	// held by it and a loop held by loss detection look identical in wakeTimer
+	// and call for opposite fixes.
+	blockedNs  atomic.Uint64
+	blocks     atomic.Uint64
+	wakeTimer  atomic.Uint64
+	wakeSend   atomic.Uint64
+	armedPacer atomic.Uint64
+
 	// recvStreamGraceNs is the delay (nanoseconds) between a recv stream's
 	// removal trigger (EOF frame received, or a local cancel sent) and its
 	// recvStreams map entry being dropped. While the entry lives, late
@@ -164,6 +192,24 @@ type InternalState struct {
 	// transfer means the congestion response is being driven by packets that
 	// were only late — see LossStats.
 	Loss LossStats
+
+	// The run loop's account of its own waiting. All cumulative, all meaningful
+	// only as a DELTA between two readings; see the field comments on Streams
+	// for what each one distinguishes.
+	//
+	// The two derived numbers worth naming, because they are what a reader
+	// actually wants:
+	//
+	//	duty cycle = BlockedNs / wall time between two readings
+	//	mean park  = BlockedNs / Blocks
+	//
+	// and LoopIterations - Blocks is the count of iterations that never parked
+	// at all — the received-packet fast path at the top of the loop.
+	BlockedNs  uint64
+	Blocks     uint64
+	WakeTimer  uint64
+	WakeSend   uint64
+	ArmedPacer uint64
 }
 
 func (s *Streams) GetInternalState() *InternalState {
@@ -188,6 +234,11 @@ func (s *Streams) GetInternalState() *InternalState {
 		SentPackets:          sentRanges,
 		LoopIterations:       s.loopIter.Load(),
 		Loss:                 lossStats,
+		BlockedNs:            s.blockedNs.Load(),
+		Blocks:               s.blocks.Load(),
+		WakeTimer:            s.wakeTimer.Load(),
+		WakeSend:             s.wakeSend.Load(),
+		ArmedPacer:           s.armedPacer.Load(),
 	}
 }
 
@@ -395,11 +446,56 @@ func (s *Streams) handlePacket(recvData *objproto.Message) {
 	}
 }
 
+// wakeReason says what ended a park in the run loop's select.
+//
+// It exists so each select arm can record a value instead of carrying its own
+// accounting and its own `continue`: the two arms that resume at the top of the
+// loop (a received packet, a loss-timer reset) now say so through this type,
+// and the single decision after the select does what they used to do inline.
+type wakeReason uint8
+
+const (
+	wokeNothing wakeReason = iota
+	wokeTimer
+	wokeSend
+	wokeWindow
+	wokeCancel
+	wokeAck
+	wokeRecv
+	wokeSentHandler
+)
+
+// resumesLoop reports whether this wake means "start the iteration over"
+// rather than "go on to the send half". Only the two arms that used to hold a
+// bare `continue`.
+func (r wakeReason) resumesLoop() bool {
+	return r == wokeRecv || r == wokeSentHandler
+}
+
+// noteWake records one completed park. Called once per park — so the clock read
+// it costs is paid per park, not per packet — and after the select, so the
+// duration covers the whole wait.
+func (s *Streams) noteWake(parkStart time.Time, r wakeReason) {
+	s.blockedNs.Add(uint64(time.Since(parkStart)))
+	switch r {
+	case wokeTimer:
+		s.wakeTimer.Add(1)
+	case wokeSend:
+		s.wakeSend.Add(1)
+	}
+}
+
 // nextWakeDeadline computes the wall-clock time the run loop should wake to do
 // timer-driven work (loss detection / pacing), independent of the I/O
 // notification channels it also selects on. A zero time means "no timer; block
 // until a notification arrives".
-func (s *Streams) nextWakeDeadline() time.Time {
+//
+// The second return says whether the deadline returned is the PACER's rather
+// than loss detection's. The counter built on it is the only thing that
+// separates a loop rate-limited by its own bandwidth estimate from one waiting
+// on a peer that has gone quiet: both park on a timer, and a wake count alone
+// cannot tell them apart.
+func (s *Streams) nextWakeDeadline() (time.Time, bool) {
 	deadline := s.sh.LossDetectionTimeout()
 	// Pacing governs only data sends, so fold the pacing timer into the wake
 	// deadline ONLY when a send could actually happen on wake: congestion
@@ -418,10 +514,10 @@ func (s *Streams) nextWakeDeadline() time.Time {
 	if s.sh.CanSend() && s.sendTrigger.Len() > 0 {
 		pacer := s.sh.PacingTimeout()
 		if !pacer.IsZero() && (deadline.IsZero() || pacer.Before(deadline)) {
-			deadline = pacer
+			return pacer, true
 		}
 	}
-	return deadline
+	return deadline, false
 }
 
 func (s *Streams) run(ctx context.Context) {
@@ -457,19 +553,32 @@ func (s *Streams) run(ctx context.Context) {
 			s.handlePacket(recvedData)
 			continue
 		}
-		deadline := s.nextWakeDeadline()
+		deadline, fromPacer := s.nextWakeDeadline()
+		// Count the park as it is ENTERED: a loop that never wakes again still
+		// reports having parked, and a frozen loopIter beside it says it is
+		// still there.
+		s.blocks.Add(1)
+		if fromPacer {
+			s.armedPacer.Add(1)
+		}
+		parkStart := time.Now()
+		woke := wokeNothing
 		if deadline.IsZero() {
 			select {
 			case <-ctx.Done():
 				return // end
 			case <-s.sendTrigger.Notification(): // when new data to send
+				woke = wokeSend
 			case <-s.updateWindow.Notification(): // when new recv window to update
+				woke = wokeWindow
 			case <-s.cancelTrigger.Notification(): // when stream cancel is requested
+				woke = wokeCancel
 			case <-s.pt.NotifyReceive(): // when new stream ack to process
+				woke = wokeAck
 			case <-s.recv.Notification(): // when new data received
-				continue
+				woke = wokeRecv
 			case <-s.sh.Notification(): // when timer resets
-				continue
+				woke = wokeSentHandler
 			}
 		} else {
 			wake.Reset(time.Until(deadline))
@@ -477,15 +586,27 @@ func (s *Streams) run(ctx context.Context) {
 			case <-ctx.Done():
 				return // end
 			case <-wake.C:
+				woke = wokeTimer
 			case <-s.sendTrigger.Notification(): // when new data to send
+				woke = wokeSend
 			case <-s.updateWindow.Notification(): // when new recv window to update
+				woke = wokeWindow
 			case <-s.cancelTrigger.Notification(): // when stream cancel is requested
+				woke = wokeCancel
 			case <-s.pt.NotifyReceive(): // when new stream ack to process
+				woke = wokeAck
 			case <-s.recv.Notification(): // when new data received
-				continue // process received data immediately
+				woke = wokeRecv
 			case <-s.sh.Notification(): // when timer resets
-				continue
+				woke = wokeSentHandler
 			}
+		}
+		s.noteWake(parkStart, woke)
+		if woke.resumesLoop() {
+			// A received packet is processed immediately at the top of the
+			// loop; a loss-timer reset re-evaluates the deadline. Neither runs
+			// the send half.
+			continue
 		}
 		now := time.Now()
 		lossTimeout := s.sh.LossDetectionTimeout()

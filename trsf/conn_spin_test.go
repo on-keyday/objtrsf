@@ -61,9 +61,12 @@ func TestNextWakeDeadlineNoSpinNothingToSend(t *testing.T) {
 	if !sh.CanSend() {
 		t.Fatalf("setup: expected CanSend true for tiny in-flight")
 	}
-	d := s.nextWakeDeadline()
+	d, fromPacer := s.nextWakeDeadline()
 	if !d.IsZero() && d.Before(time.Now()) {
 		t.Fatalf("nothing-to-send: wake deadline is in the past (%v) -> busy spin", d)
+	}
+	if fromPacer {
+		t.Errorf("nothing-to-send: deadline reported as the pacer's, but the pacer was not folded in")
 	}
 }
 
@@ -84,8 +87,37 @@ func TestNextWakeDeadlineNoSpinCongestionBlocked(t *testing.T) {
 	if s.sendTrigger.Len() == 0 {
 		t.Fatalf("setup: expected a queued send stream")
 	}
-	d := s.nextWakeDeadline()
+	d, fromPacer := s.nextWakeDeadline()
 	if !d.IsZero() && d.Before(time.Now()) {
 		t.Fatalf("congestion-blocked: wake deadline is in the past (%v) -> busy spin", d)
+	}
+	if fromPacer {
+		t.Errorf("congestion-blocked: deadline reported as the pacer's, but CanSend() is false")
+	}
+}
+
+// The two tests above pin the cases where the pacer is NOT consulted. This one
+// pins the case where it is, and that nextWakeDeadline SAYS SO — the counter
+// built on this answer is what separates "the loop is waiting on the pacer's
+// 1 ms floor" from "the loop is waiting on loss detection", and those two look
+// identical from a wake count alone.
+//
+// Here the deadline legitimately IS in the past: a send can happen, so waking
+// immediately leads to one rather than to another blocked spin.
+func TestNextWakeDeadlineNamesThePacerWhenItIsTheSource(t *testing.T) {
+	sh := spinTestSetup(t, 50) // tiny in-flight -> CanSend() true
+	s := &Streams{sh: sh, sendTrigger: newWithTriggerQueue[sendStream]()}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mtuTracker := mtu.NewMTUTracker(1200, 1500, 30*time.Second)
+	st := newSendStream(context.Background(), mtuTracker, 1,
+		newFlowController(InitialFlowWindow), logger, s.sendTrigger)
+	s.sendTrigger.Push(st) // data queued AND CanSend() -> the pacer governs
+
+	d, fromPacer := s.nextWakeDeadline()
+	if !fromPacer {
+		t.Fatalf("deadline %v not reported as the pacer's, but it governs here", d)
+	}
+	if want := sh.PacingTimeout(); !d.Equal(want) {
+		t.Errorf("deadline = %v, want the pacing timeout %v", d, want)
 	}
 }
