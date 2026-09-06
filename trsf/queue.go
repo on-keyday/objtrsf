@@ -1,6 +1,47 @@
 package trsf
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
+
+// pushReason says WHY something was put on a trigger queue.
+//
+// It exists because the wake counters attribute a park to the CHANNEL that
+// ended it, and one channel is many-to-one: sendTrigger is pushed from ten
+// places meaning at least five different things. "The park ended on the send
+// trigger" therefore cannot distinguish "the application supplied more data"
+// (the transport is starved) from "an ACK retired a range" (the window
+// reopened) — opposite conclusions from one number, and the first reading of
+// these counters drew the wrong one on a lossy path for exactly that reason.
+//
+// The rule the mistake teaches: attribute a counter where the DECISION is
+// made, not where the event happens to pass through. armedPacer is counted
+// inside nextWakeDeadline, which is why it meant the same thing on a clean
+// path and a lossy one; wakeSend is counted at the select, which is why it did
+// not.
+type pushReason uint8
+
+const (
+	// pushOther is stream creation, a cancel, a peer flow-window update, and a
+	// requeued retransmit: rare next to the rest, and none of them answers the
+	// app-versus-window question.
+	pushOther pushReason = iota
+	// pushApp — the application supplied data or flagged EOF. This one, and
+	// only this one, means the transport was waiting on its caller.
+	pushApp
+	// pushACK — an ACK retired a range, so the stream can send again. Means
+	// the window was the constraint, not the application.
+	pushACK
+	// pushSelf — the run loop's own continuation: data is still buffered after
+	// the packet it just built, or another packet took this iteration's slot.
+	// Not waiting for anything external; the loop is cycling.
+	pushSelf
+	// pushCwnd — a stream parked in congestionBlocked was revived because
+	// CanSend() reopened. The unambiguous "this was congestion-blocked" signal.
+	pushCwnd
+	numPushReasons
+)
 
 type trigger struct {
 	notify chan struct{}
@@ -14,6 +55,12 @@ type withTriggerQueue[T any] struct {
 	m     sync.Mutex
 	set   map[*T]struct{}
 	queue []*T
+	// pushes counts push EVENTS by reason, including the ones the dedupe
+	// below drops. Deliberately: the question is what wanted the loop to run,
+	// not how many times it woke, and those differ — an item already queued is
+	// not re-enqueued and fires no notification. So pushes >= wakes, always,
+	// and the two are not two views of one number.
+	pushes [numPushReasons]atomic.Uint64
 	*trigger
 }
 
@@ -29,7 +76,25 @@ func (q *withTriggerQueue[T]) Len() int {
 	return len(q.queue)
 }
 
-func (q *withTriggerQueue[T]) Push(s *T) {
+// PushCounts reports the per-reason event counts. Only the send trigger's are
+// read; the other queues carry the array and never look at it.
+func (q *withTriggerQueue[T]) PushCounts() [numPushReasons]uint64 {
+	var out [numPushReasons]uint64
+	for i := range q.pushes {
+		out[i] = q.pushes[i].Load()
+	}
+	return out
+}
+
+// Push enqueues without saying why. Kept for the queues whose pushes have only
+// one meaning (recv, send actions, window updates, cancels); the send trigger
+// uses PushBecause.
+func (q *withTriggerQueue[T]) Push(s *T) { q.PushBecause(s, pushOther) }
+
+func (q *withTriggerQueue[T]) PushBecause(s *T, why pushReason) {
+	// Counted before the dedupe: an event that found the item already queued
+	// still says what wanted the loop to run.
+	q.pushes[why].Add(1)
 	q.m.Lock()
 	defer q.m.Unlock()
 	if q.set == nil {

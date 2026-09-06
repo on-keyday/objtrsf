@@ -113,3 +113,62 @@ func TestWakeStatsAttributesASendTriggerWake(t *testing.T) {
 		t.Errorf("BlockedNs = %v, want at least %v — the park was not accounted", got, parked*4/5)
 	}
 }
+
+// WakeSend says which CHANNEL ended a park; it cannot say what pushed that
+// channel. Two pushes with opposite meanings — the application supplying data,
+// and an ACK retiring a range — produce the SAME wake, and reading the wake as
+// the first of them is the mistake these push counts exist to correct.
+//
+// So this test asserts what the wake cannot: that the two are counted apart,
+// and that the wake count does not distinguish them.
+func TestSendPushCountsSeparateWhatWakeSendCannot(t *testing.T) {
+	q := newWithTriggerQueue[sendStream]()
+	st := &sendStream{}
+
+	// Two pushes with OPPOSITE meanings — the application supplying data, and
+	// an ACK retiring a range — plus a second ACK the dedupe will drop.
+	q.PushBecause(st, pushApp)
+	q.PushBecause(st, pushACK)
+	q.PushBecause(st, pushACK)
+
+	c := q.PushCounts()
+	if c[pushApp] != 1 {
+		t.Errorf("pushApp = %d, want 1", c[pushApp])
+	}
+	if c[pushACK] != 2 {
+		t.Errorf("pushACK = %d, want 2 — the event is counted even when the dedupe drops it", c[pushACK])
+	}
+	if c[pushSelf] != 0 || c[pushCwnd] != 0 {
+		t.Errorf("unrelated reasons moved: self=%d cwnd=%d", c[pushSelf], c[pushCwnd])
+	}
+
+	// And here is the whole reason these exist: three events, ONE pending
+	// notification. A park ending on that notification cannot say which of the
+	// three ended it, so the wake count can never separate them.
+	pending := 0
+	for {
+		select {
+		case <-q.Notification():
+			pending++
+			continue
+		default:
+		}
+		break
+	}
+	if pending != 1 {
+		t.Fatalf("pending notifications = %d, want 1: the premise of the push counts is that "+
+			"several events collapse onto one wake", pending)
+	}
+}
+
+// The counts reach InternalState through a real path rather than only through
+// the queue: a created stream is a pushOther, and the reader must see it.
+func TestSendPushCountsReachInternalState(t *testing.T) {
+	s := newIdleStreams(t)
+	before := s.GetInternalState()
+	s.CreateSendStream()
+	got := s.GetInternalState()
+	if d := got.SendPushOther - before.SendPushOther; d != 1 {
+		t.Errorf("SendPushOther delta = %d, want 1 for one opened stream", d)
+	}
+}

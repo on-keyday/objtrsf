@@ -135,15 +135,22 @@ type Streams struct {
 	// of the truth, and the first thing this instrument printed. The reader
 	// pays one clock read per CALL for that, not per park.
 	//
-	// wakeTimer and wakeSend are the two arms the diagnosis turns on — a park
-	// ended by the timer is the transport waiting on a deadline of its own, one
-	// ended by the send trigger is the application not feeding it. Everything
-	// else (an inbound packet, an ACK to send, a window update, a cancel) is
-	// the remainder, blocks - wakeTimer - wakeSend, and means the peer.
+	// wakeTimer and wakeSend say which CHANNEL ended the park. Everything else
+	// (an inbound packet, an ACK to send, a window update, a cancel) is the
+	// remainder, blocks - wakeTimer - wakeSend, and means the peer.
+	//
+	// wakeSend does NOT mean "the application is not feeding it", and reading
+	// it that way was wrong: sendTrigger is pushed from ten places meaning at
+	// least five different things, so the channel cannot separate "the app
+	// wrote more" from "an ACK reopened the window". The send trigger's own
+	// per-reason push counts are what answer that — see pushReason — and they
+	// count EVENTS, so they exceed the wakes rather than partitioning them.
 	//
 	// armedPacer splits the timer arm: the pacer's own floor is 1 ms, so a loop
 	// held by it and a loop held by loss detection look identical in wakeTimer
-	// and call for opposite fixes.
+	// and call for opposite fixes. It is counted inside nextWakeDeadline, where
+	// the choice is MADE, which is why it meant the same thing on a clean path
+	// and a lossy one where wakeSend did not.
 	blockedNs atomic.Uint64
 	blocks    atomic.Uint64
 	// parkStartNs is the monotonic-ish start of the park in progress (0 when
@@ -216,6 +223,26 @@ type InternalState struct {
 	WakeTimer  uint64
 	WakeSend   uint64
 	ArmedPacer uint64
+
+	// Why the send trigger was pushed, counted where each push is MADE rather
+	// than at the channel it arrives on. WakeSend alone cannot tell these
+	// apart, and two of them support opposite conclusions:
+	//
+	//	SendPushApp   the application supplied data or EOF — the transport was
+	//	              waiting on its caller
+	//	SendPushACK   an ACK retired a range — the window was the constraint
+	//	SendPushSelf  the loop's own continuation (more data already buffered,
+	//	              or another packet took the iteration's slot) — not waiting
+	//	SendPushCwnd  a congestion-blocked stream was revived when cwnd reopened
+	//	SendPushOther stream open, cancel, peer flow-window, requeued retransmit
+	//
+	// These are EVENT counts, including pushes the queue's dedupe drops, so
+	// their sum is >= Blocks and they do not partition the wakes.
+	SendPushApp   uint64
+	SendPushACK   uint64
+	SendPushSelf  uint64
+	SendPushCwnd  uint64
+	SendPushOther uint64
 }
 
 func (s *Streams) GetInternalState() *InternalState {
@@ -224,6 +251,7 @@ func (s *Streams) GetInternalState() *InternalState {
 	activeRecvStream := len(s.recvStreams)
 	s.streamsLock.Unlock()
 	sentRanges, bytesInFlight, congestionWindow, smoothedRTT, rttVariance, lossStats := s.sh.GetInternal()
+	pushes := s.sendTrigger.PushCounts()
 	return &InternalState{
 		ActiveSendStreams:    activeSendStream,
 		ActiveReceiveStreams: activeRecvStream,
@@ -245,6 +273,11 @@ func (s *Streams) GetInternalState() *InternalState {
 		WakeTimer:            s.wakeTimer.Load(),
 		WakeSend:             s.wakeSend.Load(),
 		ArmedPacer:           s.armedPacer.Load(),
+		SendPushApp:          pushes[pushApp],
+		SendPushACK:          pushes[pushACK],
+		SendPushSelf:         pushes[pushSelf],
+		SendPushCwnd:         pushes[pushCwnd],
+		SendPushOther:        pushes[pushOther],
 	}
 }
 
@@ -552,7 +585,7 @@ func (s *Streams) run(ctx context.Context) {
 		if len(s.congestionBlocked) > 0 && s.sh.CanSend() {
 			for id, blocked := range s.congestionBlocked {
 				delete(s.congestionBlocked, id)
-				s.sendTrigger.Push(blocked)
+				s.sendTrigger.PushBecause(blocked, pushCwnd)
 			}
 		}
 		recvedData := s.recv.Pop()
@@ -728,7 +761,7 @@ func (s *Streams) run(ctx context.Context) {
 			// path in handlePacket cannot reclaim its recvStreams entry.
 			s.scheduleRecvStreamRemoval(cancelStream)
 			if stream != nil {
-				s.sendTrigger.Push(stream) // re-push
+				s.sendTrigger.PushBecause(stream, pushSelf) // re-push: another packet took this slot
 			}
 			if updateWindowStream != nil {
 				s.updateWindow.Push(updateWindowStream) // re-push
@@ -780,7 +813,7 @@ func (s *Streams) run(ctx context.Context) {
 				ACK:          ack,
 			})
 			if stream != nil {
-				s.sendTrigger.Push(stream) // re-push
+				s.sendTrigger.PushBecause(stream, pushSelf) // re-push: another packet took this slot
 			}
 			continue
 		}
@@ -962,7 +995,7 @@ func (r *Streams) CreateBidirectionalStream() BidirectionalStream {
 	// path materializes the stream entry. Without this, peers can't resolve
 	// an idle freshly-created stream via GetBidirectionalStream(id).
 	ss.pendingOpen.Store(true)
-	r.sendTrigger.Push(ss)
+	r.sendTrigger.PushBecause(ss, pushOther) // stream opened
 	return &bidiStream{
 		SendStream:    ss,
 		ReceiveStream: &wrapRecvStream{rs},
@@ -977,7 +1010,7 @@ func (r *Streams) CreateSendStream() SendStream {
 	ss := newSendStream(r.ctx, r.mtu, id, newFlowController(InitialFlowWindow), r.logger, r.sendTrigger)
 	r.sendStreams[ss.ID()] = ss
 	ss.pendingOpen.Store(true)
-	r.sendTrigger.Push(ss)
+	r.sendTrigger.PushBecause(ss, pushOther) // stream opened
 	return ss
 }
 

@@ -86,13 +86,13 @@ func (r *sendStream) updateFlowWindow(size int) {
 	defer r.m.Unlock()
 	if r.flow.UpdateWindow(size) {
 		r.logger.Debug("updated send stream window", "stream_id", r.id, "new_window", size)
-		r.sendTrigger.Push(r)
+		r.sendTrigger.PushBecause(r, pushOther)
 	}
 }
 
 func (r *sendStream) onCancel() {
 	r.cancelRequested.Store(true)
-	r.sendTrigger.Push(r)
+	r.sendTrigger.PushBecause(r, pushOther)
 }
 
 func (r *sendStream) signalWriter() {
@@ -136,9 +136,9 @@ func (r *sendStream) Close() error {
 	// otherwise, even if triggerPacket cannot get signalEOF at this moment,
 	// r.sendTrigger.Push(r) will wake up triggerPacket later
 	// if not, Write will return EOF error
-	r.signalEOF.Store(true) // flag EOF
-	r.sendTrigger.Push(r)   // force trigger to send EOF
-	r.signalWriter()        // wake up writer if waiting
+	r.signalEOF.Store(true)               // flag EOF
+	r.sendTrigger.PushBecause(r, pushApp) // force trigger to send EOF
+	r.signalWriter()                      // wake up writer if waiting
 	return nil
 }
 
@@ -210,7 +210,7 @@ func (r *sendStream) AppendDataContext(ctx context.Context, eof bool, data ...[]
 			changed = true
 		}
 		if changed {
-			r.sendTrigger.Push(r)
+			r.sendTrigger.PushBecause(r, pushApp)
 		}
 		break
 	}
@@ -315,7 +315,7 @@ func (r *sendStream) triggerPacket(maxPayload int) *SentRange {
 	}
 	onLost := func(now time.Time) {
 		r.retransmitQueue.Push(sentRange)
-		r.sendTrigger.Push(r)
+		r.sendTrigger.PushBecause(r, pushOther)
 	}
 	onACK := func(now time.Time) {
 		r.onACK(sentRange, now)
@@ -330,7 +330,7 @@ func (r *sendStream) triggerPacket(maxPayload int) *SentRange {
 	}
 	r.flow.RecordSend(sentRange.SentSize)
 	if r.flow.SendableSize() > 0 && len(r.inputBuffer) > 0 || (!r.eofSent && r.signalEOF.Load()) {
-		r.sendTrigger.Push(r) // trigger next send
+		r.sendTrigger.PushBecause(r, pushSelf) // trigger next send
 	}
 	r.signalWriter()
 	return sentRange
@@ -355,7 +355,7 @@ func (r *sendStream) onACK(pkt *SentRange, now time.Time) {
 	if len(r.sentRanges) > 0 && r.sentRanges[0] == pkt {
 		r.sentRanges[0] = nil
 		r.sentRanges = r.sentRanges[1:]
-		r.sendTrigger.Push(r)
+		r.sendTrigger.PushBecause(r, pushACK)
 		return
 	}
 	kept := r.sentRanges[:0]
@@ -368,5 +368,5 @@ func (r *sendStream) onACK(pkt *SentRange, now time.Time) {
 		r.sentRanges[i] = nil
 	}
 	r.sentRanges = kept
-	r.sendTrigger.Push(r)
+	r.sendTrigger.PushBecause(r, pushACK)
 }
