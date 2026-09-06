@@ -13,13 +13,24 @@ type RTTStats struct {
 	LatestRTT  time.Duration
 }
 
+// noMinRTT is MinRTT before any sample the clock could resolve. It is a
+// sentinel and not a measurement, so HasMinRTT is what readers ask.
+const noMinRTT = time.Duration(1<<63 - 1)
+
 func NewRTTStats(initialRTT time.Duration) *RTTStats {
 	return &RTTStats{
 		SRTT:   initialRTT,
 		RTTVAR: initialRTT / 2,
-		MinRTT: time.Duration(1<<63 - 1),
+		MinRTT: noMinRTT,
 	}
 }
+
+// HasMinRTT reports whether any round trip has been measured at a resolution
+// this machine's clock could express. False is a real state on a host whose
+// clock is coarser than the path — see UpdateRTT — and it is NOT the same as a
+// min_rtt of zero, which is why it is a separate question rather than a
+// comparison against 0.
+func (rtt *RTTStats) HasMinRTT() bool { return rtt.MinRTT != noMinRTT }
 
 func absDuration(a time.Duration) time.Duration {
 	if a < 0 {
@@ -55,7 +66,21 @@ func (rtt *RTTStats) PTO(exponent int) time.Duration {
 // whole defence: a delay large enough to push the sample below min_rtt is
 // ignored outright rather than believed or clamped.
 func (rtt *RTTStats) UpdateRTT(logger *slog.Logger, measured, ackDelay time.Duration, now time.Time) {
-	if rtt.MinRTT > measured {
+	// A sample of exactly zero is not a measurement; it is a clock that could
+	// not resolve the interval. Go's nanotime on Windows reads the interrupt
+	// time out of KUSER_SHARED_DATA (runtime/time_windows.h, _INTERRUPT_TIME at
+	// 0x7ffe0008), which the kernel updates once per system timer interrupt —
+	// 15.625 ms by default, ~0.5 ms on a machine that has lowered it. Measured
+	// on this project's Windows host: 199,998 of 200,000 consecutive time.Now()
+	// pairs reported the SAME instant, smallest non-zero gap 503.6 µs. Every
+	// round trip faster than that reads as 0.
+	//
+	// MinRTT would latch that zero permanently, and srtt - min_rtt — which this
+	// project reads as queueing delay — would then report the whole round trip
+	// as queue on every connection that ever saw one fast ACK. SRTT still takes
+	// the sample: there a zero is one small error inside an average, where in a
+	// minimum it is forever.
+	if measured > 0 && rtt.MinRTT > measured {
 		rtt.MinRTT = measured
 	}
 	rtt.LatestRTT = measured

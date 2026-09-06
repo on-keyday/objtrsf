@@ -199,12 +199,19 @@ type InternalState struct {
 	CongestionWindow     int
 	SmoothedRTT          time.Duration
 	RTTVariance          time.Duration
-	// MinRTT is the smallest round trip ever measured on this connection, and
-	// 0 before any ACK has arrived. Against SmoothedRTT it is queueing delay
-	// directly: a min of a few ms under an srtt of 150 says the window is
-	// standing in a buffer rather than crossing a slow path, and those two call
-	// for opposite responses.
+	// MinRTT is the smallest round trip this connection has measured, and
+	// MinRTTValid says whether it measured one at all. Against SmoothedRTT it
+	// is queueing delay directly: a min of a few ms under an srtt of 150 says
+	// the window is standing in a buffer rather than crossing a slow path, and
+	// those two call for opposite responses.
+	//
+	// The flag is separate from the value on purpose. Reading "not measured" off
+	// MinRTT == 0 collapsed exactly the distinction this project keeps paying
+	// for: a host whose clock cannot resolve the path reports a legitimate
+	// zero, and gating on the value reported that as if nothing had been
+	// measured at all.
 	MinRTT         time.Duration
+	MinRTTValid    bool
 	SentPackets    []InternalSentPacket
 	LoopIterations uint64
 	// Loss is the loss detector's account of itself. Spurious rising during a
@@ -260,6 +267,13 @@ func (s *Streams) GetInternalState() *InternalState {
 	s.streamsLock.Unlock()
 	sentRanges, bytesInFlight, congestionWindow, rtt, lossStats := s.sh.GetInternal()
 	pushes := s.sendTrigger.PushCounts()
+	// The sentinel never leaves this package: an unresolved minimum reports as
+	// zero WITH MinRTTValid false, so a reader that ignores the flag sees a
+	// harmless zero rather than 2562047h47m16s.
+	minRTT := time.Duration(0)
+	if rtt.HasMinRTT() {
+		minRTT = rtt.MinRTT
+	}
 	return &InternalState{
 		ActiveSendStreams:    activeSendStream,
 		ActiveReceiveStreams: activeRecvStream,
@@ -273,7 +287,8 @@ func (s *Streams) GetInternalState() *InternalState {
 		CongestionWindow:     congestionWindow,
 		SmoothedRTT:          rtt.SRTT,
 		RTTVariance:          rtt.RTTVAR,
-		MinRTT:               rtt.MinRTT,
+		MinRTT:               minRTT,
+		MinRTTValid:          rtt.HasMinRTT(),
 		SentPackets:          sentRanges,
 		LoopIterations:       s.loopIter.Load(),
 		Loss:                 lossStats,

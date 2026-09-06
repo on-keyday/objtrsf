@@ -135,15 +135,7 @@ func (ah *SentPacketHandler) GetInternal() ([]InternalSentPacket, int, int, cong
 			StreamID:   p.StreamID,
 		})
 	}
-	rtt := *ah.rtt
-	if rtt.NoACKReceived() {
-		// MinRTT starts at the maximum duration and is only ever lowered, so
-		// before the first ACK it is a sentinel rather than a measurement.
-		// Normalised HERE, where the sentinel is known, so no reader has to
-		// recognise 2562047h47m16s as "not measured yet".
-		rtt.MinRTT = 0
-	}
-	return sentRanges, ah.bytesInFlight, ah.cong.GetCongestionWindow(), rtt, ah.loss
+	return sentRanges, ah.bytesInFlight, ah.cong.GetCongestionWindow(), *ah.rtt, ah.loss
 }
 
 func (ah *SentPacketHandler) CanSend() bool {

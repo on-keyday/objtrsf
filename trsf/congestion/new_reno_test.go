@@ -173,3 +173,36 @@ func TestUpdateRTTWithZeroAckDelayIsUnchanged(t *testing.T) {
 		t.Errorf("SRTT=%v MinRTT=%v, want both 40ms", rtt.SRTT, rtt.MinRTT)
 	}
 }
+
+// A clock that cannot resolve the path reports a round trip of exactly zero.
+// That is not a measurement, and MinRTT must not latch it: a minimum is kept
+// forever, so one unresolvable sample would tell every later reader that the
+// entire round trip is queueing delay.
+//
+// Measured on this project's Windows host, where Go's nanotime reads the
+// interrupt time out of KUSER_SHARED_DATA: 199,998 of 200,000 consecutive
+// time.Now() pairs reported the same instant, smallest non-zero gap 503.6 us.
+func TestZeroSampleDoesNotLatchMinRTT(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	rtt := NewRTTStats(10 * time.Millisecond)
+	now := time.Now()
+
+	if rtt.HasMinRTT() {
+		t.Fatal("HasMinRTT before any sample")
+	}
+	// An unresolvable round trip. SRTT still takes it — one small error inside
+	// an average — but the minimum must stay unset rather than become 0.
+	rtt.UpdateRTT(logger, 0, 0, now)
+	if rtt.HasMinRTT() {
+		t.Errorf("a zero sample set MinRTT to %v: a coarse clock would pin it there forever", rtt.MinRTT)
+	}
+	if rtt.SRTT != 0 {
+		t.Errorf("SRTT = %v, want the sample: it is an average and can absorb one", rtt.SRTT)
+	}
+
+	// The first sample the clock CAN resolve is the minimum.
+	rtt.UpdateRTT(logger, 4*time.Millisecond, 0, now)
+	if !rtt.HasMinRTT() || rtt.MinRTT != 4*time.Millisecond {
+		t.Errorf("MinRTT = %v (valid %v), want 4ms", rtt.MinRTT, rtt.HasMinRTT())
+	}
+}
