@@ -128,11 +128,12 @@ type Streams struct {
 	// 540 µs per packet, on a host 79% idle — the loop was not computing, and
 	// nothing here could say what it was waiting for.
 	//
-	// blocks counts parks ENTERED and blockedNs accumulates on the wake, so a
-	// loop still parked reads blocks=N, blockedNs unchanged. Deliberate: a
-	// stopped loop is already what a frozen loopIter says, and paying for an
-	// in-progress duration would mean a clock read per reader instead of per
-	// park.
+	// blocks counts parks ENTERED. blockedNs accrues on the wake AND includes
+	// the park still in progress, added by the reader from parkStartNs: a loop
+	// parked for a whole sampling interval would otherwise report zero blocked
+	// time, which on the operator's screen reads as "busy" — the exact opposite
+	// of the truth, and the first thing this instrument printed. The reader
+	// pays one clock read per CALL for that, not per park.
 	//
 	// wakeTimer and wakeSend are the two arms the diagnosis turns on — a park
 	// ended by the timer is the transport waiting on a deadline of its own, one
@@ -143,11 +144,16 @@ type Streams struct {
 	// armedPacer splits the timer arm: the pacer's own floor is 1 ms, so a loop
 	// held by it and a loop held by loss detection look identical in wakeTimer
 	// and call for opposite fixes.
-	blockedNs  atomic.Uint64
-	blocks     atomic.Uint64
-	wakeTimer  atomic.Uint64
-	wakeSend   atomic.Uint64
-	armedPacer atomic.Uint64
+	blockedNs atomic.Uint64
+	blocks    atomic.Uint64
+	// parkStartNs is the monotonic-ish start of the park in progress (0 when
+	// the loop is running). A reader adds now-parkStartNs to blockedNs; a wake
+	// racing that read costs at most one sample's worth of skew, which for a
+	// counter read at second-scale intervals is not worth a lock.
+	parkStartNs atomic.Int64
+	wakeTimer   atomic.Uint64
+	wakeSend    atomic.Uint64
+	armedPacer  atomic.Uint64
 
 	// recvStreamGraceNs is the delay (nanoseconds) between a recv stream's
 	// removal trigger (EOF frame received, or a local cancel sent) and its
@@ -234,7 +240,7 @@ func (s *Streams) GetInternalState() *InternalState {
 		SentPackets:          sentRanges,
 		LoopIterations:       s.loopIter.Load(),
 		Loss:                 lossStats,
-		BlockedNs:            s.blockedNs.Load(),
+		BlockedNs:            s.blockedNsNow(),
 		Blocks:               s.blocks.Load(),
 		WakeTimer:            s.wakeTimer.Load(),
 		WakeSend:             s.wakeSend.Load(),
@@ -476,6 +482,7 @@ func (r wakeReason) resumesLoop() bool {
 // it costs is paid per park, not per packet — and after the select, so the
 // duration covers the whole wait.
 func (s *Streams) noteWake(parkStart time.Time, r wakeReason) {
+	s.parkStartNs.Store(0)
 	s.blockedNs.Add(uint64(time.Since(parkStart)))
 	switch r {
 	case wokeTimer:
@@ -562,6 +569,7 @@ func (s *Streams) run(ctx context.Context) {
 			s.armedPacer.Add(1)
 		}
 		parkStart := time.Now()
+		s.parkStartNs.Store(parkStart.UnixNano())
 		woke := wokeNothing
 		if deadline.IsZero() {
 			select {
@@ -996,4 +1004,20 @@ func (r *Streams) AcceptBidirectionalStream(ctx context.Context) (BidirectionalS
 	case bs := <-r.newBidiStreamQueue:
 		return bs, nil
 	}
+}
+
+// blockedNsNow is blockedNs plus the park currently in progress.
+//
+// Without the second term a loop parked across a whole sampling interval
+// reports zero blocked time — indistinguishable from one that never stopped,
+// and the reading an operator is most likely to be looking at when they ask
+// why nothing is moving.
+func (s *Streams) blockedNsNow() uint64 {
+	total := s.blockedNs.Load()
+	if start := s.parkStartNs.Load(); start != 0 {
+		if d := time.Now().UnixNano() - start; d > 0 {
+			total += uint64(d)
+		}
+	}
+	return total
 }

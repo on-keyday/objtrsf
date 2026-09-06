@@ -38,12 +38,12 @@ func newIdleStreams(t *testing.T) *Streams {
 // An idle run loop parks ONCE and stays there: nothing is queued and nothing is
 // in flight, so nextWakeDeadline returns zero and the select has no timer arm.
 //
-// The park is counted when it is ENTERED and its duration added only when it
-// ends, so a loop that is still parked reads Blocks=1 with BlockedNs=0. That
-// pairing is the point: it separates "parked right now" from "cycling through
-// many short parks", which is the distinction the 540 µs-per-packet
-// investigation needs and which LoopIterations alone cannot make.
-func TestWakeStatsIdleLoopParksOnceAndReportsNoBlockedTimeYet(t *testing.T) {
+// Its blocked time must keep GROWING while it sits there. The first version of
+// this counter only accrued on the wake, so a loop parked across a whole
+// sampling interval reported zero blocked time — which the operator's BLOCK%
+// column rendered as 0%, i.e. "busy", the exact opposite of the truth. The
+// reader adds the park in progress, and this is the test that says so.
+func TestWakeStatsIdleLoopCountsTheParkItIsStillIn(t *testing.T) {
 	s := newIdleStreams(t)
 
 	st := waitForState(t, s, 2*time.Second, "the loop to park", func(st *InternalState) bool {
@@ -52,16 +52,30 @@ func TestWakeStatsIdleLoopParksOnceAndReportsNoBlockedTimeYet(t *testing.T) {
 	if st.Blocks != 1 {
 		t.Errorf("Blocks = %d, want 1: an idle loop has nothing to wake it", st.Blocks)
 	}
-	if st.BlockedNs != 0 {
-		t.Errorf("BlockedNs = %v, want 0 while still parked: the duration is added on WAKE",
-			time.Duration(st.BlockedNs))
-	}
 	if st.WakeTimer != 0 {
 		t.Errorf("WakeTimer = %d, want 0: an idle loop arms no timer", st.WakeTimer)
 	}
 	if st.ArmedPacer != 0 {
 		t.Errorf("ArmedPacer = %d, want 0: the pacer is folded in only when a send could happen",
 			st.ArmedPacer)
+	}
+
+	first := s.GetInternalState().BlockedNs
+	const wait = 30 * time.Millisecond
+	time.Sleep(wait)
+	second := s.GetInternalState().BlockedNs
+
+	if second <= first {
+		t.Fatalf("BlockedNs did not grow while parked: %v then %v — a loop parked for the "+
+			"whole interval would report as busy", time.Duration(first), time.Duration(second))
+	}
+	// It grew by roughly the sleep, not by some unrelated amount: the reader is
+	// adding the CURRENT park, not double-counting a finished one.
+	if grew := time.Duration(second - first); grew < wait*4/5 || grew > wait*3 {
+		t.Errorf("BlockedNs grew by %v across a %v sleep — want about the sleep", grew, wait)
+	}
+	if s.GetInternalState().Blocks != 1 {
+		t.Errorf("Blocks moved: the loop woke during the test, which invalidates the reading")
 	}
 }
 
