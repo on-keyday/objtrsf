@@ -199,8 +199,14 @@ type InternalState struct {
 	CongestionWindow     int
 	SmoothedRTT          time.Duration
 	RTTVariance          time.Duration
-	SentPackets          []InternalSentPacket
-	LoopIterations       uint64
+	// MinRTT is the smallest round trip ever measured on this connection, and
+	// 0 before any ACK has arrived. Against SmoothedRTT it is queueing delay
+	// directly: a min of a few ms under an srtt of 150 says the window is
+	// standing in a buffer rather than crossing a slow path, and those two call
+	// for opposite responses.
+	MinRTT         time.Duration
+	SentPackets    []InternalSentPacket
+	LoopIterations uint64
 	// Loss is the loss detector's account of itself. Spurious rising during a
 	// transfer means the congestion response is being driven by packets that
 	// were only late — see LossStats.
@@ -252,7 +258,7 @@ func (s *Streams) GetInternalState() *InternalState {
 	activeSendStream := len(s.sendStreams)
 	activeRecvStream := len(s.recvStreams)
 	s.streamsLock.Unlock()
-	sentRanges, bytesInFlight, congestionWindow, smoothedRTT, rttVariance, lossStats := s.sh.GetInternal()
+	sentRanges, bytesInFlight, congestionWindow, rtt, lossStats := s.sh.GetInternal()
 	pushes := s.sendTrigger.PushCounts()
 	return &InternalState{
 		ActiveSendStreams:    activeSendStream,
@@ -265,8 +271,9 @@ func (s *Streams) GetInternalState() *InternalState {
 		CancelStreamCount:    s.cancelTrigger.Len(),
 		BytesInFlight:        bytesInFlight,
 		CongestionWindow:     congestionWindow,
-		SmoothedRTT:          smoothedRTT,
-		RTTVariance:          rttVariance,
+		SmoothedRTT:          rtt.SRTT,
+		RTTVariance:          rtt.RTTVAR,
+		MinRTT:               rtt.MinRTT,
 		SentPackets:          sentRanges,
 		LoopIterations:       s.loopIter.Load(),
 		Loss:                 lossStats,

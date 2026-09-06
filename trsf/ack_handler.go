@@ -118,7 +118,11 @@ type SentPacket struct {
 	Kind         wire.ApplicationPayloadKind
 }
 
-func (ah *SentPacketHandler) GetInternal() ([]InternalSentPacket, int, int, time.Duration, time.Duration, LossStats) {
+// GetInternal reports the handler's own state. The RTT stats travel as one
+// value rather than as loose durations: MinRTT joined SRTT and RTTVAR here, and
+// a seventh positional return is how a caller comes to pass them in the wrong
+// order.
+func (ah *SentPacketHandler) GetInternal() ([]InternalSentPacket, int, int, congestion.RTTStats, LossStats) {
 	ah.m.Lock()
 	defer ah.m.Unlock()
 	var sentRanges []InternalSentPacket = make([]InternalSentPacket, 0, len(ah.sentRanges))
@@ -131,7 +135,15 @@ func (ah *SentPacketHandler) GetInternal() ([]InternalSentPacket, int, int, time
 			StreamID:   p.StreamID,
 		})
 	}
-	return sentRanges, ah.bytesInFlight, ah.cong.GetCongestionWindow(), ah.rtt.SRTT, ah.rtt.RTTVAR, ah.loss
+	rtt := *ah.rtt
+	if rtt.NoACKReceived() {
+		// MinRTT starts at the maximum duration and is only ever lowered, so
+		// before the first ACK it is a sentinel rather than a measurement.
+		// Normalised HERE, where the sentinel is known, so no reader has to
+		// recognise 2562047h47m16s as "not measured yet".
+		rtt.MinRTT = 0
+	}
+	return sentRanges, ah.bytesInFlight, ah.cong.GetCongestionWindow(), rtt, ah.loss
 }
 
 func (ah *SentPacketHandler) CanSend() bool {
