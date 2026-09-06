@@ -272,6 +272,10 @@ func (r *sendStream) triggerPacket(maxPayload int) *SentRange {
 			r.retransmitQueue.Push(popped)
 		} else {
 			r.logger.Debug("retransmitting stream data", "id", popped.ID, "offset", popped.Offset, "size", len(popped.Data))
+			// This return skips the tail of the function, so the re-queue has
+			// to happen here too — see requeueIfMore for what it cost when it
+			// did not.
+			r.requeueIfMore()
 			return popped
 		}
 	}
@@ -329,11 +333,31 @@ func (r *sendStream) triggerPacket(maxPayload int) *SentRange {
 		r.eofSent = true
 	}
 	r.flow.RecordSend(sentRange.SentSize)
-	if r.flow.SendableSize() > 0 && len(r.inputBuffer) > 0 || (!r.eofSent && r.signalEOF.Load()) {
-		r.sendTrigger.PushBecause(r, pushSelf) // trigger next send
-	}
+	r.requeueIfMore()
 	r.signalWriter()
 	return sentRange
+}
+
+// requeueIfMore puts the stream back on the send trigger when it still has
+// something to hand over. EVERY exit from triggerPacket that emitted a packet
+// has to call it, and the retransmit branch did not.
+//
+// What that cost, measured on scripts/netem-lab at 1 ms: a retransmit returned
+// from the top of triggerPacket, skipping this, so the stream came off
+// sendTrigger with its buffer still full — 670 KB of it on average — a wide
+// open flow window and an open congestion window. Nothing re-queues a stream in
+// that state except sendStream.onACK, which pushes unconditionally, so the run
+// loop parked until the next ACK arrived: one round trip, about 2.4 ms, roughly
+// two thousand times a second, 93% of the transfer's wall clock.
+//
+// A 128 MB pull went 3.3 -> 47 MB/s, and the run-to-run spread the netem-lab
+// README records as unexplained (median 9.60 MB/s, stdev 70%) went to a median
+// of 49.57 with stdev 4% — the spread was this too, since every transfer's rate
+// depended on how many retransmits happened to fall in it.
+func (r *sendStream) requeueIfMore() {
+	if r.flow.SendableSize() > 0 && len(r.inputBuffer) > 0 || (!r.eofSent && r.signalEOF.Load()) {
+		r.sendTrigger.PushBecause(r, pushSelf)
+	}
 }
 
 func (r *sendStream) onACK(pkt *SentRange, now time.Time) {
