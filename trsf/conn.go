@@ -234,7 +234,8 @@ type InternalState struct {
 	//	SendPushSelf  the loop's own continuation (more data already buffered,
 	//	              or another packet took the iteration's slot) — not waiting
 	//	SendPushCwnd  a congestion-blocked stream was revived when cwnd reopened
-	//	SendPushOther stream open, cancel, peer flow-window, requeued retransmit
+	//	SendPushLoss  a packet was declared lost and requeued for retransmit
+	//	SendPushOther stream open, cancel, peer flow-window
 	//
 	// These are EVENT counts, including pushes the queue's dedupe drops, so
 	// their sum is >= Blocks and they do not partition the wakes.
@@ -242,6 +243,7 @@ type InternalState struct {
 	SendPushACK   uint64
 	SendPushSelf  uint64
 	SendPushCwnd  uint64
+	SendPushLoss  uint64
 	SendPushOther uint64
 }
 
@@ -277,6 +279,7 @@ func (s *Streams) GetInternalState() *InternalState {
 		SendPushACK:          pushes[pushACK],
 		SendPushSelf:         pushes[pushSelf],
 		SendPushCwnd:         pushes[pushCwnd],
+		SendPushLoss:         pushes[pushLoss],
 		SendPushOther:        pushes[pushOther],
 	}
 }

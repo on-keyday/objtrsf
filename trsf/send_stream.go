@@ -315,7 +315,7 @@ func (r *sendStream) triggerPacket(maxPayload int) *SentRange {
 	}
 	onLost := func(now time.Time) {
 		r.retransmitQueue.Push(sentRange)
-		r.sendTrigger.PushBecause(r, pushOther)
+		r.sendTrigger.PushBecause(r, pushLoss)
 	}
 	onACK := func(now time.Time) {
 		r.onACK(sentRange, now)

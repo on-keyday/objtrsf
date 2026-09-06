@@ -23,9 +23,12 @@ import (
 type pushReason uint8
 
 const (
-	// pushOther is stream creation, a cancel, a peer flow-window update, and a
-	// requeued retransmit: rare next to the rest, and none of them answers the
-	// app-versus-window question.
+	// pushOther is stream creation, a cancel and a peer flow-window update:
+	// rare next to the rest, and none of them answers the app-versus-window
+	// question. A requeued retransmit used to be folded in here and is not:
+	// measured on a 2 ms netem path it was 4,966 of the interval's pushes
+	// against 4,953 lost packets, so "other" was really "loss" wearing a name
+	// that hid it — the uninterpretable bucket these reasons exist to remove.
 	pushOther pushReason = iota
 	// pushApp — the application supplied data or flagged EOF. This one, and
 	// only this one, means the transport was waiting on its caller.
@@ -40,6 +43,11 @@ const (
 	// pushCwnd — a stream parked in congestionBlocked was revived because
 	// CanSend() reopened. The unambiguous "this was congestion-blocked" signal.
 	pushCwnd
+	// pushLoss — the loss detector gave up on a packet and its range went back
+	// on the retransmit queue. One per LOST PACKET, not per congestion event:
+	// detectLost retires many packets in one pass, so this can dwarf the loss
+	// event count and is the honest measure of retransmission pressure.
+	pushLoss
 	numPushReasons
 )
 
