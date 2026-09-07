@@ -59,6 +59,39 @@ func NewECDHHandshake(curve ecdh.Curve, commonKeyKind packet.CommonKeyKind) ([]b
 	return priv.Bytes(), probeData, nil
 }
 
+// CommonKeyKindSupported reports whether a peer's AEAD selection is one this
+// build implements. The values are not contiguous (115/67/34/62), so this is a
+// switch and not a range test.
+//
+// It exists so a responder can refuse an out-of-range selection BEFORE it does
+// any asymmetric work. Until this was hoisted, the only thing that rejected an
+// unsupported kind was addActiveConnection's own switch, which runs after a
+// keygen, an ECDH and five HKDF derivations -- so one small datagram naming a
+// kind that cannot exist bought all of that and then threw it away.
+func CommonKeyKindSupported(kind packet.CommonKeyKind) error {
+	switch kind {
+	case packet.CommonKeyKind_Aes128Gcm,
+		packet.CommonKeyKind_Aes192Gcm,
+		packet.CommonKeyKind_Aes256Gcm,
+		packet.CommonKeyKind_Chacha20Poly1305:
+		return nil
+	default:
+		return fmt.Errorf("unsupported common key kind: %v", kind)
+	}
+}
+
+// ecdhShared is ECDHFromHandshake's second half, split out so a caller that has
+// already parsed the peer's share does not parse it twice. Parsing is the point
+// of the split: it validates the peer's bytes, so a responder wants it BEFORE
+// generating a key of its own, while the ECDH itself must come after.
+func ecdhShared(curve ecdh.Curve, selfPrivate []byte, peerPub *ecdh.PublicKey) ([]byte, error) {
+	selfPriv, err := curve.NewPrivateKey(selfPrivate)
+	if err != nil {
+		return nil, err
+	}
+	return selfPriv.ECDH(peerPub)
+}
+
 func CurveFromKeyKind(kind packet.KeyKind) (ecdh.Curve, error) {
 	switch kind {
 	case packet.KeyKind_X25519:
@@ -175,11 +208,7 @@ func ECDHFromHandshake(selfPrivate []byte, probe *packet.Handshake) ([]byte, pac
 	if err != nil {
 		return nil, 0, err
 	}
-	selfPriv, err := curve.NewPrivateKey(selfPrivate)
-	if err != nil {
-		return nil, 0, err
-	}
-	shared, err := selfPriv.ECDH(peerPub)
+	shared, err := ecdhShared(curve, selfPrivate, peerPub)
 	if err != nil {
 		return nil, 0, err
 	}

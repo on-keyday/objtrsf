@@ -902,20 +902,61 @@ func (s *endpoint) addActiveConnection(cid ConnectionID, selfSecret []byte, peer
 	return nil
 }
 
+// handshakeAlreadyActive answers the duplicate question under the READ lock, so
+// the answer costs a map lookup instead of a key exchange. receiveHandshake
+// re-checks under the write lock before inserting; this one only decides
+// whether the expensive path is worth entering at all.
+func (s *endpoint) handshakeAlreadyActive(cid ConnectionID) bool {
+	s.endpointLock.RLock()
+	defer s.endpointLock.RUnlock()
+	_, exists := s.activeConnections[cid]
+	return exists
+}
+
 func (s *endpoint) receiveHandshake(cid ConnectionID, hs *packet.Handshake, originalPacket []byte) error {
+	// EVERY cheap rejection happens before anything asymmetric. On the direct
+	// data-plane path a responder answers arbitrary addresses, so each check
+	// below is reachable by a datagram anyone can send for free -- and until
+	// this was reordered, refusing one cost a keygen, an ECDH and five HKDF
+	// derivations that were then discarded. The ordering is the mitigation, so
+	// nothing expensive may move above this block.
 	curve, err := CurveFromKeyKind(hs.KeyKind)
 	if err != nil {
 		s.logger.Error("failed to get curve from key kind", "cid", cid.String(), "error", err, "keyKind", hs.KeyKind)
 		return fmt.Errorf("failed to get curve from key kind: %w", err)
 	}
+	if err := CommonKeyKindSupported(hs.CommonKeyKind); err != nil {
+		s.logger.Warn("handshake names an unsupported aead", "cid", cid.String(), "error", err)
+		return fmt.Errorf("handshake rejected: %w", err)
+	}
+	// A duplicate is a map lookup, and it was the LAST thing checked -- so a
+	// replayed handshake bought the whole key exchange before being told it was
+	// a replay. It matters beyond replay: a dialer that retransmits its
+	// ClientHello, which is the fix the direct-dial probe doc asks for, would
+	// make this the NORMAL case rather than the attack. It goes above the share
+	// parse because a map lookup is cheaper than validating a P521 point.
+	if s.handshakeAlreadyActive(cid) {
+		s.logger.Warn("connection already exists for handshake", "cid", cid.String())
+		return fmt.Errorf("connection already exists for %v", cid)
+	}
+	// Parsing the peer's share is what validates its length and that the point
+	// is on the curve. Not free -- on P521 it allocates -- but far cheaper than
+	// generating a key, and it used to run after one.
+	peerPub, err := curve.NewPublicKey(hs.KeyShare)
+	if err != nil {
+		s.logger.Warn("handshake carries an invalid key share", "cid", cid.String(), "error", err)
+		return fmt.Errorf("invalid peer key share: %w", err)
+	}
+
 	priv, response, err := NewECDHHandshake(curve, hs.CommonKeyKind)
 	if err != nil {
 		return fmt.Errorf("failed to create ECDH probe: %w", err)
 	}
-	sharedSecret, commonKeyKind, err := ECDHFromHandshake(priv, hs)
+	sharedSecret, err := ecdhShared(curve, priv, peerPub)
 	if err != nil {
 		return fmt.Errorf("failed to derive shared secret: %w", err)
 	}
+	commonKeyKind := hs.CommonKeyKind
 	hsIntegrityInfo := integrityInfo(cid, hs)
 	keys, err := keySchedule(sharedSecret, hsIntegrityInfo)
 	if err != nil {
@@ -924,6 +965,10 @@ func (s *endpoint) receiveHandshake(cid ConnectionID, hs *packet.Handshake, orig
 	clear(priv)
 	s.endpointLock.Lock()
 	defer s.endpointLock.Unlock()
+	// Re-checked under the write lock. The cheap check above releases the read
+	// lock before the key exchange, so two handshakes for one new cid can both
+	// reach here; check-and-insert has to stay one atomic section, as it was
+	// when the only check lived here.
 	if _, exists := s.activeConnections[cid]; exists {
 		s.logger.Warn("connection already exists for handshake", "cid", cid.String())
 		return fmt.Errorf("connection already exists for %v", cid)
@@ -971,6 +1016,13 @@ func (s *endpoint) receiveHandshakeAck(cid ConnectionID, hs *packet.Handshake, o
 			s.logger.Warn("invalid handshake for cid", "cid", cid.String(), "error", err.Error())
 		}
 	}()
+	// Free, and it belongs before the ECDH for the same reason as on the
+	// responder side. The big gate here is already early: an ack for a cid this
+	// endpoint never dialed is refused by the sentHandshake lookup above,
+	// before any crypto at all.
+	if err := CommonKeyKindSupported(hs.CommonKeyKind); err != nil {
+		return fmt.Errorf("handshake ack rejected: %w", err)
+	}
 	sharedSecret, commonKeyKind, err := ECDHFromHandshake(sentProbes.PrivateKey, hs)
 	if err != nil {
 		return fmt.Errorf("failed to derive shared secret: %w", err)
