@@ -59,25 +59,23 @@ func NewECDHHandshake(curve ecdh.Curve, commonKeyKind packet.CommonKeyKind) ([]b
 	return priv.Bytes(), probeData, nil
 }
 
-// CommonKeyKindSupported reports whether a peer's AEAD selection is one this
-// build implements. The values are not contiguous (115/67/34/62), so this is a
-// switch and not a range test.
+// CommonKeyKindSupported turns the schema's own membership test into the error
+// its callers want. It exists so a responder can refuse an out-of-range
+// selection BEFORE it does any asymmetric work: until that was hoisted, the
+// only thing rejecting an unsupported kind was addActiveConnection's switch,
+// which runs after a keygen, an ECDH and five HKDF derivations -- so one small
+// datagram naming a kind that cannot exist bought all of that and threw it away.
 //
-// It exists so a responder can refuse an out-of-range selection BEFORE it does
-// any asymmetric work. Until this was hoisted, the only thing that rejected an
-// unsupported kind was addActiveConnection's own switch, which runs after a
-// keygen, an ECDH and five HKDF derivations -- so one small datagram naming a
-// kind that cannot exist bought all of that and then threw it away.
+// The membership test itself is NOT written here. packet.bgn declares the four
+// values and `fn isCommonKeyKindDefined` next to them, and ebm2go emits the
+// comparison; a switch in this file would have been those values a third time
+// (declaration, switch, test) and, since they are 0x73/0x43/0x22/0x3e, it could
+// not even collapse to a range.
 func CommonKeyKindSupported(kind packet.CommonKeyKind) error {
-	switch kind {
-	case packet.CommonKeyKind_Aes128Gcm,
-		packet.CommonKeyKind_Aes192Gcm,
-		packet.CommonKeyKind_Aes256Gcm,
-		packet.CommonKeyKind_Chacha20Poly1305:
+	if packet.IsCommonKeyKindDefined(kind) {
 		return nil
-	default:
-		return fmt.Errorf("unsupported common key kind: %v", kind)
 	}
+	return fmt.Errorf("unsupported common key kind: %v", kind)
 }
 
 // ecdhShared is ECDHFromHandshake's second half, split out so a caller that has

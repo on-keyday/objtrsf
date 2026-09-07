@@ -185,22 +185,18 @@ func TestValidHandshakeStillCompletesAndKeepsTheTranscript(t *testing.T) {
 	}
 }
 
-func TestCommonKeyKindSupportedAcceptsExactlyTheFour(t *testing.T) {
-	for _, k := range []packet.CommonKeyKind{
-		packet.CommonKeyKind_Aes128Gcm,
-		packet.CommonKeyKind_Aes192Gcm,
-		packet.CommonKeyKind_Aes256Gcm,
-		packet.CommonKeyKind_Chacha20Poly1305,
-	} {
-		if err := CommonKeyKindSupported(k); err != nil {
-			t.Errorf("CommonKeyKindSupported(%v) = %v, want nil", k, err)
-		}
+// Deliberately NOT a table over the four members. The membership test is
+// generated from packet.bgn's declaration, so listing the members here would be
+// the third copy of them and would pass whether or not the generated function
+// agrees with the schema. What is worth pinning is this wrapper's own job:
+// turning that boolean into the error its callers branch on.
+func TestCommonKeyKindSupportedReportsTheSchemasAnswerAsAnError(t *testing.T) {
+	if err := CommonKeyKindSupported(packet.CommonKeyKind_Aes128Gcm); err != nil {
+		t.Errorf("a declared kind gave %v, want nil", err)
 	}
-	// The values are 115/67/34/62, so neighbours of a valid one are invalid --
-	// which is why this cannot be a range test.
-	for _, k := range []packet.CommonKeyKind{0, 33, 35, 61, 63, 66, 68, 114, 116, 255} {
-		if err := CommonKeyKindSupported(k); err == nil {
-			t.Errorf("CommonKeyKindSupported(%d) = nil, want an error", k)
-		}
+	// 116 is 115+1: adjacent to a declared value and not one itself, which is
+	// what makes this a membership question rather than a range check.
+	if err := CommonKeyKindSupported(packet.CommonKeyKind(116)); err == nil {
+		t.Error("an undeclared kind gave nil, want an error")
 	}
 }

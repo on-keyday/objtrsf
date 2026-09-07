@@ -76,5 +76,10 @@ format Packet:
     header :PacketHeader
     data :[header.len]u8
 
-
-
+# A peer names its AEAD on the wire, so a responder has to answer "is that a
+# value this protocol has?" before it does any asymmetric work. That question
+# belongs here, where the members are declared: a hand-written switch in Go was
+# the same four values a third time, and the values are 0x73/0x43/0x22/0x3e, so
+# it could not even be a range test.
+fn isCommonKeyKindDefined(kind :CommonKeyKind) -> bool:
+    return kind.is_defined
