@@ -22,6 +22,22 @@ type MTUTracker struct {
 	onMTUUpdate           func(int)
 }
 
+// maxReprobeBackoff caps the exponential re-probe backoff at 2^n times the
+// configured period.
+//
+// The backoff exists so a path that is not changing is not re-searched
+// forever, and it resets in exactly one place: OnACK, when a probe raises the
+// MTU. That reset can be structurally unreachable. Any path whose true MTU is
+// below max -- a tunnel, a VPN, anything but the ceiling the caller guessed --
+// converges to the same value on every re-probe and so never produces an
+// increase, and the interval then doubles without bound: 30s * 2^10 is over
+// eight hours. That matters because this is also the only way back from a
+// search that converged too LOW, which three lost probes at a size the path
+// would in fact have carried are enough to cause. Capping at 2^6 keeps the
+// futile case cheap (one search per ~32 min at a 30s period) while leaving
+// recovery on a timescale a connection can actually reach.
+const maxReprobeBackoff = 6
+
 func NewMTUTracker(min, max int, reprobePeriod time.Duration) *MTUTracker {
 	return &MTUTracker{
 		mtu:                   min,
@@ -56,7 +72,9 @@ func (t *MTUTracker) Probe(now time.Time) int {
 		t.high = t.max
 		t.lastProbeConverged = time.Time{}
 		t.lossCount = 0
-		t.reprobeBackoffCount++
+		if t.reprobeBackoffCount < maxReprobeBackoff {
+			t.reprobeBackoffCount++
+		}
 	}
 	t.probeSent = true
 

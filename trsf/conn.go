@@ -958,8 +958,33 @@ func (s *Streams) Recv(ctx context.Context) *SendAction {
 	}
 }
 
-const DefaultInitialMTU = 1200
-const DefaultMaxMTU = 1500
+// DefaultInitialMTU and DefaultMaxMTU bound the PLPMTUD search. Both are trsf
+// PACKET sizes -- what fits in one UDP datagram's payload, this layer's header
+// and AEAD tag (fixedOverhead) included -- and NOT what an interface reports
+// as its MTU: the IP and UDP headers sit outside this number.
+//
+// DefaultMaxMTU is an Ethernet 1500 minus the largest IP+UDP header pair the
+// socket can end up using. It used to be a bare 1500, which is that same 1500
+// counted in the wrong unit, and the consequence was structural rather than
+// merely a little too eager: the top 28 (IPv4) to 48 (IPv6) bytes of the range
+// were unsendable by construction, so every search ended by spending probes on
+// a size the local socket rejects, and MTUTracker's `mtu >= max` "converged at
+// the ceiling, stop re-probing" case could never be reached. Only loopback
+// (MTU 65536) satisfies it, which is why this looked fine in tests and not on
+// a real path.
+//
+// The socket is dual-stack (transport/udp.go binds ::), so a connection may
+// land on either family and the IPv6 figure is the safe one. An IPv4-only
+// deployment can pass 1472 to NewStreams and take those 20 bytes back.
+const (
+	DefaultInitialMTU = 1200
+
+	// ipv6UDPHeaderBytes is the fixed IPv6 (40) + UDP (8) header pair; IPv4
+	// costs 20 + 8, so the larger of the two is safe for both.
+	ipv6UDPHeaderBytes = 48
+
+	DefaultMaxMTU = 1500 - ipv6UDPHeaderBytes
+)
 
 func NewStreams(ctx context.Context, isServer bool, initialMTU int, maxMTU int, pnIssuer PacketNumberIssuer, logger *slog.Logger) Transport {
 	s := &Streams{

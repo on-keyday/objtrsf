@@ -21,6 +21,16 @@ type SentPacketHandler struct {
 	largestAcked  uint64
 	bytesInFlight int
 
+	// mtuProbesOutstanding counts the MTU probes sitting in sentRanges
+	// awaiting a verdict. It is a separate count rather than part of
+	// bytesInFlight on purpose -- a probe must never reach congestion control
+	// -- but bytesInFlight is ALSO what setLossDetectionTimer reads to decide
+	// whether anything is worth waking for. Without this count a probe with no
+	// data beside it leaves the timer disabled, the run loop parks with no
+	// deadline, and that probe's loss is unobservable for the life of the
+	// connection.
+	mtuProbesOutstanding int
+
 	sentRanges []*SentPacket
 	logger     *slog.Logger
 	rtt        *congestion.RTTStats
@@ -204,6 +214,8 @@ func (ah *SentPacketHandler) OnSent(s *SentPacket) error {
 	if !s.IsMTUProbe {
 		ah.addBytesInFlight(s.PacketSize)
 		ah.cong.RecordSend(s.PacketSize, s.SentTime)
+	} else {
+		ah.mtuProbesOutstanding++
 	}
 	ah.largestSent = max(ah.largestSent, s.PacketNumber)
 	ah.setLossDetectionTimer(s.SentTime)
@@ -266,6 +278,7 @@ func (ah *SentPacketHandler) detectAck(rcvTime time.Time, ranges []Range) ([]*Se
 		}
 		if p.IsMTUProbe {
 			probeSize += p.PacketSize
+			ah.mtuProbesOutstanding--
 		}
 	}
 	if len(ackedPackets) > 0 {
@@ -324,6 +337,7 @@ func (ah *SentPacketHandler) detectLost(now time.Time) {
 			if p.IsMTUProbe {
 				mtuProbe++
 				probeSize += p.PacketSize
+				ah.mtuProbesOutstanding--
 			} else {
 				// MTU probes are expected to be lost — that is how the probe
 				// reports a too-large MTU — so they are not evidence about the
@@ -358,7 +372,10 @@ func (ah *SentPacketHandler) setLossDetectionTimer(now time.Time) {
 		ah.multiModalTimer = ah.lossTime
 		return
 	}
-	if ah.bytesInFlight == 0 {
+	// An outstanding MTU probe arms the timer even though it contributes no
+	// bytesInFlight: it is the only thing that will ever declare that probe
+	// lost. See mtuProbesOutstanding.
+	if ah.bytesInFlight == 0 && ah.mtuProbesOutstanding == 0 {
 		ah.logger.Debug("No packets in flight, disable loss timer")
 		ah.multiModalTimer = time.Time{}
 		return
@@ -366,6 +383,51 @@ func (ah *SentPacketHandler) setLossDetectionTimer(now time.Time) {
 	pto := ah.rtt.PTO(ah.ptoCount)
 	ah.logger.Debug("Set PTO timer", "from_now", pto)
 	ah.multiModalTimer = now.Add(pto)
+}
+
+// declareLostMTUProbes retires every outstanding MTU probe and reports how
+// many it retired.
+//
+// A probe's timer expiry IS its loss declaration, which is not how a data
+// packet is treated: for data, PTO only prompts a retransmission and leaves
+// the packet in sentRanges, still eligible to be acked later. A probe cannot
+// be handled that way for two reasons. Nothing retransmits it -- MTUTracker
+// issues the next attempt itself, at a size of its own choosing -- and
+// leaving it in sentRanges would let the following expiry report the SAME
+// probe as a second loss, so three expiries would collapse the tracker's
+// upper bound below the true path MTU without a single extra packet having
+// been put on the path.
+//
+// No bytes leave bytesInFlight and no congestion response is taken: a probe
+// was never counted there, and its loss reports a size limit rather than
+// anything about the path's capacity.
+func (ah *SentPacketHandler) declareLostMTUProbes(now time.Time) int {
+	if ah.mtuProbesOutstanding == 0 {
+		return 0
+	}
+	// Filtered in place, like detectAck and detectLost. OnLost on a probe only
+	// touches MTUTracker, so it cannot mutate this slice while the loop walks
+	// it.
+	origLen := len(ah.sentRanges)
+	remain := ah.sentRanges[:0]
+	lost := 0
+	for _, p := range ah.sentRanges {
+		if !p.IsMTUProbe {
+			remain = append(remain, p)
+			continue
+		}
+		lost++
+		if p.OnLost != nil {
+			p.OnLost(now)
+		}
+	}
+	for i := len(remain); i < origLen; i++ {
+		ah.sentRanges[i] = nil
+	}
+	ah.sentRanges = remain
+	ah.mtuProbesOutstanding -= lost
+	ah.logger.Debug("MTU probe timed out", "probes", lost)
+	return lost
 }
 
 func (ah *SentPacketHandler) OnTimeout(now time.Time) (bool, error) {
@@ -384,7 +446,21 @@ func (ah *SentPacketHandler) OnTimeout(now time.Time) (bool, error) {
 	// However, there's no way to reset the timer in the connection.
 	// When OnLossDetectionTimeout is called, we therefore need to make sure that there are
 	// actually packets outstanding.
+	// An outstanding MTU probe expires HERE, and nowhere else. Probes are kept
+	// out of bytesInFlight, which also keeps them out of every ACK-driven
+	// detectLost pass: that one skips everything above largestAcked, and a
+	// probe sent with no data behind it is always above it.
+	lostProbes := ah.declareLostMTUProbes(now)
+
 	if ah.bytesInFlight == 0 {
+		if lostProbes > 0 {
+			// The probe was the only thing outstanding, so retiring it above
+			// was the whole point of this expiry. ptoCount is deliberately not
+			// advanced: a probe loss is a statement about size, not about the
+			// path, and inflating the PTO backoff on it would slow the next
+			// real retransmission.
+			return false, nil
+		}
 		return false, errors.New("BUG: no packets in flight")
 	}
 
@@ -393,16 +469,16 @@ func (ah *SentPacketHandler) OnTimeout(now time.Time) (bool, error) {
 	}
 	ah.ptoCount++
 	ah.logger.Debug("PTO fired, try retransmission")
-	// first, try non MTU probe packet
+	// declareLostMTUProbes has already retired every probe, so this finds a
+	// data packet on the first entry. The filter is kept because the guarantee
+	// lives in another function.
 	for _, p := range ah.sentRanges {
 		if !p.IsMTUProbe {
 			p.OnLost(now) // trigger retransmission
 			return true, nil
 		}
 	}
-	// all are MTU probes, retransmit the first one
-	ah.sentRanges[0].OnLost(now) // retransmit the first packet
-	return true, nil
+	return false, nil
 }
 
 // ReceiveACK folds one ACK in. ackDelay is what the peer reported holding the

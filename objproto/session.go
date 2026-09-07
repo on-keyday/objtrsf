@@ -130,9 +130,20 @@ func AutoRespondProbes(s Endpoint, macAddr [6]byte, ipAddr netip.AddrPort) {
 // RawEndpoint extends Endpoint with the byte-level seam used by transport
 // packages (transport/udp.go, transport/websocket.go) to feed datagrams in
 // and out. Outbound packets arrive on GetSenderChannel; inbound bytes are
-// pushed in via Receive; CannotSend signals that a queued send was rejected
-// by the transport (e.g. EMSGSIZE, dial failure) so the upper layer can
-// react instead of treating it as silently delivered.
+// pushed in via Receive; CannotSend reports that a queued send was rejected by
+// the transport.
+//
+// CannotSend is a TERMINAL report, not a per-packet one: the only
+// implementation closes the connection the packet belonged to. An oversized
+// datagram is therefore NOT one of its cases, whatever an earlier version of
+// this comment claimed -- transport/udp.go deliberately routes EMSGSIZE past
+// it and drops the datagram, because handing a too-large PLPMTUD probe to
+// CannotSend would tear the connection down. Nothing carries "this one
+// datagram did not fit" up to trsf; see the comment at that drop for why not.
+// If a size signal is ever wanted here it needs its own path, and the reason
+// to hesitate is that EMSGSIZE does not mean the same thing on every OS --
+// probe-mode Linux raises it only above the INTERFACE MTU, while the plain
+// DF-bit platforms let their kernel's own path-MTU knowledge in.
 type RawEndpoint interface {
 	Endpoint
 	GetSenderChannel() <-chan *PacketData

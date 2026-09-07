@@ -63,8 +63,27 @@ func UDPEndpointEx(sess objproto.RawEndpoint, logger *slog.Logger, port uint16, 
 			})
 			if err != nil {
 				if isMessageTooBig(err) {
+					// Dropped, and NOT reported upward: this must not reach
+					// CannotSend, which closes the connection. The upper layer
+					// runs its own PLPMTUD and will conclude the same thing
+					// from the probe going unacknowledged (trsf's PROBE_TIMER),
+					// just a round trip later than the kernel already knows it.
+					//
+					// Handing the size verdict up instead is not the obvious
+					// win it looks like, because "EMSGSIZE" is not one fact.
+					// Probe-mode Linux (IP_PMTUDISC_PROBE) ignores the path-MTU
+					// cache, so it raises this ONLY above the local interface
+					// MTU; Windows and Darwin/FreeBSD have no probe mode and
+					// set the bare DF bit, so their kernels' own path-MTU
+					// knowledge is in play as well. The same probe size can
+					// therefore fail locally on one host and go out on the
+					// wire from another, which would make the estimate depend
+					// on the sender's OS. And on the path this discovery
+					// exists FOR -- a tunnel narrower than the interface, say
+					// a 1280-byte one -- Linux raises nothing at all, so the
+					// timeout path has to work regardless.
 					logger.Debug("udp packet size too large, cannot send", slog.String("to", pkt.To.String()), slog.Int("size", len(pkt.Data)))
-					continue // ignore too big error because upper layer implements PLPMTUD
+					continue
 				}
 				logger.Error("failed to send udp packet", slog.String("to", pkt.To.String()), slog.String("error", err.Error()))
 				sess.CannotSend(pkt)
