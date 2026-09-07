@@ -124,24 +124,43 @@ func TestInvalidKeyShareIsRefusedBeforeAnyKeyExchange(t *testing.T) {
 	}
 }
 
-// The replay case, and the one that stops being an attack the moment a dialer
-// retransmits: a duplicate used to be the LAST thing checked.
-func TestDuplicateHandshakeIsRefusedBeforeAnyKeyExchange(t *testing.T) {
+// A repeat of the SAME hello is a retransmission, so it is answered by replaying
+// the stored ack -- see handshake_retransmit_test.go for why re-deriving cannot
+// work. What this pins is the cost: answering it must not re-run the key
+// exchange. It was the LAST thing checked once, so a repeat paid for the whole
+// exchange before being recognised, and now that a dialer retransmits this is
+// the normal path rather than the attack.
+func TestRepeatedHandshakeIsAnsweredWithoutAnotherKeyExchange(t *testing.T) {
 	ep := testEndpoint(t)
 	cid := cidAt(3)
 	hs := helloOn(t, ecdh.P521(), packet.CommonKeyKind_Aes128Gcm)
+	hello := []byte("first")
 
-	if err := ep.receiveHandshake(cid, hs, []byte("first")); err != nil {
+	if err := ep.receiveHandshake(cid, hs, hello); err != nil {
 		t.Fatalf("the first handshake must succeed: %v", err)
 	}
-	if err := ep.receiveHandshake(cid, hs, []byte("first")); err == nil {
-		t.Fatal("a duplicate handshake at a live cid was accepted; that is key confusion")
+	drain(ep) // the first ack
+	if err := ep.receiveHandshake(cid, hs, hello); err != nil {
+		t.Fatalf("a repeat of the same hello must be replayed, got: %v", err)
+	}
+	if p := drain(ep); p == nil || p.Kind != packet.PacketKind_HandshakeAck {
+		t.Fatal("no ack was queued for the repeat; a dialer waiting on it would time out")
 	}
 	got := testing.AllocsPerRun(20, func() {
-		_ = ep.receiveHandshake(cid, hs, []byte("first"))
+		_ = ep.receiveHandshake(cid, hs, hello)
 	})
 	if budget := skippedWorkAllocs(t); got >= budget {
-		t.Errorf("refusing a duplicate allocated %.0f, at or above the work it should skip (%.0f): the duplicate check is back below the key exchange", got, budget)
+		t.Errorf("answering a repeat allocated %.0f, at or above the work it should skip (%.0f): the duplicate check is back below the key exchange", got, budget)
+	}
+}
+
+// drain takes one queued packet, or nil when there is none.
+func drain(ep *endpoint) *PacketData {
+	select {
+	case p := <-ep.pktQueue:
+		return p
+	default:
+		return nil
 	}
 }
 

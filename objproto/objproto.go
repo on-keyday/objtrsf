@@ -1,6 +1,7 @@
 package objproto
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -645,7 +646,14 @@ func (s *endpoint) sendHandshake(cid ConnectionID, priv []byte, hs *Handshake, c
 	}
 	s.sendPacket(cid, packet.PacketKind_Handshake, p)
 	s.logger.Debug("sent handshake", "cid", cid.String())
-	return &ChanWithTimeout[Connection]{C: hsDone}, nil
+	// objproto has no retransmission of its own anywhere else -- prevKeyRetention
+	// defers to trsf, which does not exist yet at handshake time -- so one
+	// dropped datagram used to cost the whole dial. The wait retransmits.
+	return &ChanWithTimeout[Connection]{
+		C:         hsDone,
+		onTick:    func() { s.retransmitHandshake(cid) },
+		tickAfter: initialHandshakeRetransmit,
+	}, nil
 }
 
 func (s *endpoint) sendRehandshakeForProxy(a *activeConnection, priv []byte, hs *Handshake) (*ChanWithTimeout[Connection], error) {
@@ -902,15 +910,65 @@ func (s *endpoint) addActiveConnection(cid ConnectionID, selfSecret []byte, peer
 	return nil
 }
 
-// handshakeAlreadyActive answers the duplicate question under the READ lock, so
-// the answer costs a map lookup instead of a key exchange. receiveHandshake
-// re-checks under the write lock before inserting; this one only decides
-// whether the expensive path is worth entering at all.
-func (s *endpoint) handshakeAlreadyActive(cid ConnectionID) bool {
+// storedAckFor answers the duplicate question with a map lookup instead of a key
+// exchange, and distinguishes the two duplicates the caller must treat
+// differently. Three outcomes:
+//
+//	exists == false           no connection for this cid; do the handshake
+//	exists, ack != nil        the SAME hello; replay ack, do not re-derive
+//	exists, ack == nil        a DIFFERENT hello at a live cid; refuse
+//
+// The middle case is the retransmission one. It cannot be served by re-running
+// the exchange: the ack is bound to the hello that produced it, through the
+// peer's share in the ECDH and through integrityInfo in the key schedule, so a
+// second hello with a fresh ephemeral key derives a secret the stored ack does
+// not match. Replaying the stored flight is what DTLS 1.2 s4.2.4 requires for
+// exactly this reason.
+//
+// The last case must keep being refused for the TRANSCRIPT as much as the keys:
+// GetTranscript is the seam an application binds identity to, and letting a
+// different hello take over a live cid would change those bytes underneath it.
+func (s *endpoint) storedAckFor(cid ConnectionID, hello []byte) (ack []byte, exists bool) {
 	s.endpointLock.RLock()
-	defer s.endpointLock.RUnlock()
-	_, exists := s.activeConnections[cid]
-	return exists
+	active, ok := s.activeConnections[cid]
+	s.endpointLock.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	active.mu.Lock()
+	transcript, connTime := active.transcript, active.connTime
+	active.mu.Unlock()
+	if time.Since(connTime) > handshakeReackWindow {
+		return nil, true
+	}
+	// The transcript is the hello as received followed by the ack that answered
+	// it, so the ack is its remainder -- and the comparison has to be exact.
+	if len(transcript) <= len(hello) || !bytes.Equal(transcript[:len(hello)], hello) {
+		return nil, true
+	}
+	return transcript[len(hello):], true
+}
+
+// retransmitHandshake re-sends a pending handshake, byte for byte.
+//
+// It must NOT go through sendHandshake: that function's else branch closes the
+// old hsDone, clears the old private key and installs a new transcript, i.e. it
+// ROTATES the ephemeral key -- after which the responder's stored ack can never
+// match and storedAckFor's middle case is unreachable. A retransmission is the
+// same datagram or it is not a retransmission.
+func (s *endpoint) retransmitHandshake(cid ConnectionID) {
+	s.endpointLock.RLock()
+	sent, ok := s.sentHandshake[cid]
+	var transcript []byte
+	if ok {
+		transcript = sent.Transcript
+	}
+	s.endpointLock.RUnlock()
+	if !ok {
+		return // answered, or abandoned; there is nothing pending to resend
+	}
+	s.sendPacket(cid, packet.PacketKind_Handshake, transcript)
+	s.logger.Debug("retransmitted handshake", "cid", cid.String())
 }
 
 func (s *endpoint) receiveHandshake(cid ConnectionID, hs *packet.Handshake, originalPacket []byte) error {
@@ -929,15 +987,18 @@ func (s *endpoint) receiveHandshake(cid ConnectionID, hs *packet.Handshake, orig
 		s.logger.Warn("handshake names an unsupported aead", "cid", cid.String(), "error", err)
 		return fmt.Errorf("handshake rejected: %w", err)
 	}
-	// A duplicate is a map lookup, and it was the LAST thing checked -- so a
-	// replayed handshake bought the whole key exchange before being told it was
-	// a replay. It matters beyond replay: a dialer that retransmits its
-	// ClientHello, which is the fix the direct-dial probe doc asks for, would
-	// make this the NORMAL case rather than the attack. It goes above the share
-	// parse because a map lookup is cheaper than validating a P521 point.
-	if s.handshakeAlreadyActive(cid) {
-		s.logger.Warn("connection already exists for handshake", "cid", cid.String())
-		return fmt.Errorf("connection already exists for %v", cid)
+	// A duplicate is a map lookup, and it used to be the LAST thing checked --
+	// so a repeat bought the whole key exchange before being told it was one.
+	// Now that a dialer retransmits, this is the NORMAL case and not the
+	// attack. It goes above the share parse because a map lookup is cheaper
+	// than validating a P521 point.
+	if ack, exists := s.storedAckFor(cid, originalPacket); exists {
+		if ack == nil {
+			return fmt.Errorf("connection already exists for %v", cid)
+		}
+		s.sendPacket(cid, packet.PacketKind_HandshakeAck, ack)
+		s.logger.Debug("replayed handshake ack for a retransmitted hello", "cid", cid.String())
+		return nil
 	}
 	// Parsing the peer's share is what validates its length and that the point
 	// is on the curve. Not free -- on P521 it allocates -- but far cheaper than
@@ -1241,6 +1302,19 @@ var (
 	minPacketsBetweenUpdates uint64 = 1024
 	minTimeBetweenUpdates           = 1 * time.Second
 )
+
+// initialHandshakeRetransmit is the first retransmission delay for a handshake,
+// and it doubles after each one. 333ms is RFC 9002's kInitialRtt, which is also
+// the srtt trsf starts a connection with -- at handshake time neither layer has
+// an RTT estimate to derive anything better from.
+const initialHandshakeRetransmit = 333 * time.Millisecond
+
+// handshakeReackWindow bounds how long a responder will replay its stored ack
+// for a hello it has already answered. The window only has to cover a dialer's
+// retransmission schedule; bounding it stops a captured hello from being a
+// permanent "make this peer emit a packet" primitive for the life of the
+// connection.
+const handshakeReackWindow = 10 * time.Second
 
 // prevKeyRetention is how long the previous phase's receive key stays usable
 // after an advance, for packets that the advance overtook. objproto has no PTO

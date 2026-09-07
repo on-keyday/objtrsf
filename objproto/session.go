@@ -8,21 +8,53 @@ import (
 
 type ChanWithTimeout[T any] struct {
 	C <-chan T
+	// onTick, when set, runs every tickAfter that the wait goes unanswered,
+	// with tickAfter doubling after each one. The handshake paths set it to
+	// retransmit, and that is why retransmission costs no goroutine: whoever
+	// dialed is already blocked in WaitWithTimeout below. Unset means the wait
+	// behaves exactly as it always did.
+	onTick    func()
+	tickAfter time.Duration
 }
 
 func (c *ChanWithTimeout[T]) WaitWithTimeout(ctx context.Context, timeout time.Duration) (T, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	select {
-	case v, ok := <-c.C:
-		if !ok {
+	if c.onTick == nil || c.tickAfter <= 0 {
+		select {
+		case v, ok := <-c.C:
+			if !ok {
+				var zero T
+				return zero, ErrChannelClosed
+			}
+			return v, nil
+		case <-timeoutCtx.Done():
 			var zero T
-			return zero, ErrChannelClosed
+			return zero, ErrTimeout
 		}
-		return v, nil
-	case <-timeoutCtx.Done():
-		var zero T
-		return zero, ErrTimeout
+	}
+	// One timer, Reset rather than a fresh time.After per turn: a timer per
+	// iteration was 17.5% of this project's allocations once already. Go >= 1.23
+	// discards a stale value on Reset, so there is no drain to do.
+	delay := c.tickAfter
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	for {
+		select {
+		case v, ok := <-c.C:
+			if !ok {
+				var zero T
+				return zero, ErrChannelClosed
+			}
+			return v, nil
+		case <-timeoutCtx.Done():
+			var zero T
+			return zero, ErrTimeout
+		case <-timer.C:
+			c.onTick()
+			delay *= 2
+			timer.Reset(delay)
+		}
 	}
 }
 
