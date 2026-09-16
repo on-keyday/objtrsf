@@ -84,6 +84,24 @@ type Transport interface {
 	// stream id and are ordered against nothing; the consumer's own framing is
 	// what gives a payload meaning.
 	ReceiveDatagram(ctx context.Context) ([]byte, error)
+
+	// SendDatagram queues one payload subject to congestion control. It never
+	// blocks and never retransmits: a closed window, a full handoff queue or an
+	// oversized payload all return an error and increment a counter rather than
+	// parking the caller.
+	SendDatagram(b []byte) error
+
+	// SendDatagramUncontrolled is SendDatagram outside congestion control --
+	// it neither waits for the window nor consumes it. Intended for senders
+	// whose rate is bounded by construction; a bulk sender here starves the
+	// congestion-controlled streams sharing this connection, because those are
+	// the only ones that yield.
+	SendDatagramUncontrolled(b []byte) error
+
+	// MaxDatagramSize is the largest payload that fits one packet right now.
+	// It moves with PLPMTUD, so it is a live query rather than a constant, and
+	// it lives here so no consumer restates the arithmetic behind it.
+	MaxDatagramSize() int
 }
 
 func AutoSend(ctx context.Context, p Transport, conn UnderlayingSendTransport, onEnd func(err error)) {

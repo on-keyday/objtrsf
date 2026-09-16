@@ -2,6 +2,7 @@ package trsf
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -179,6 +180,25 @@ type Streams struct {
 	datagramsReceived   atomic.Uint64
 	datagramsDroppedRcv atomic.Uint64
 
+	// datagramSend is deliberately SHALLOW. Every send goes through the run
+	// loop, so a handoff queue is structural -- but depth here is latency for a
+	// payload with no retransmission to wait for, so neither end of this queue
+	// parks: a full queue is an error to the caller, and a closed window at
+	// drain time is a counted drop.
+	//
+	// Its own trigger, not sendTrigger: that queue holds sendStream values and
+	// its per-reason push counts feed SendPushApp/SendPushCwnd/... in
+	// InternalState, so waking through it would make those counters answer a
+	// question they no longer describe.
+	datagramSend              chan pendingDatagram
+	datagramTrigger           *trigger
+	datagramsSent             atomic.Uint64
+	datagramsSentUncontrolled atomic.Uint64
+	datagramsLost             atomic.Uint64
+	datagramsDroppedOversize  atomic.Uint64
+	datagramsDroppedCongest   atomic.Uint64
+	datagramsDroppedSendQueue atomic.Uint64
+
 	// unroutedTransportKind counts transport-owned kinds that reached the
 	// application seam in AutoReceive. That cannot happen while
 	// isStreamRelated's membership matches StreamAppPacket's arms, so a nonzero
@@ -281,12 +301,22 @@ type InternalState struct {
 	SendPushLoss  uint64
 	SendPushOther uint64
 
-	// Datagram accounting. DatagramsDroppedReceiveQueue is the local receive
-	// buffer overflowing, which is a DIFFERENT fact from a packet lost on the
-	// path (that one is in Loss) -- a consumer that cannot tell them apart
-	// starts every diagnosis at the wrong layer.
+	// Datagram accounting. The drop causes are kept apart because they ask
+	// different things of whoever reads them: Oversize means the payload can
+	// never fit and only the application can act, Congestion means the window
+	// said no, SendQueue means this process could not keep up,
+	// ReceiveQueue means its own buffer overflowed. All four are distinct from
+	// DatagramsLost, which is the path. A consumer that cannot tell "we dropped
+	// it" from "the network dropped it" starts every diagnosis at the wrong
+	// layer, which is the whole reason these are not one counter.
 	DatagramsReceived            uint64
 	DatagramsDroppedReceiveQueue uint64
+	DatagramsSent                uint64
+	DatagramsSentUncontrolled    uint64
+	DatagramsLost                uint64
+	DatagramsDroppedOversize     uint64
+	DatagramsDroppedCongestion   uint64
+	DatagramsDroppedSendQueue    uint64
 
 	// UnroutedTransportKind must stay zero. Nonzero means a transport-owned
 	// kind reached the application seam, i.e. the schema's routing predicate and
@@ -340,6 +370,12 @@ func (s *Streams) GetInternalState() *InternalState {
 
 		DatagramsReceived:            s.datagramsReceived.Load(),
 		DatagramsDroppedReceiveQueue: s.datagramsDroppedRcv.Load(),
+		DatagramsSent:                s.datagramsSent.Load(),
+		DatagramsSentUncontrolled:    s.datagramsSentUncontrolled.Load(),
+		DatagramsLost:                s.datagramsLost.Load(),
+		DatagramsDroppedOversize:     s.datagramsDroppedOversize.Load(),
+		DatagramsDroppedCongestion:   s.datagramsDroppedCongest.Load(),
+		DatagramsDroppedSendQueue:    s.datagramsDroppedSendQueue.Load(),
 		UnroutedTransportKind:        s.unroutedTransportKind.Load(),
 	}
 }
@@ -689,6 +725,8 @@ func (s *Streams) run(ctx context.Context) {
 				return // end
 			case <-s.sendTrigger.Notification(): // when new data to send
 				woke = wokeSend
+			case <-s.datagramTrigger.Notification(): // when a datagram is queued
+				woke = wokeSend
 			case <-s.updateWindow.Notification(): // when new recv window to update
 				woke = wokeWindow
 			case <-s.cancelTrigger.Notification(): // when stream cancel is requested
@@ -708,6 +746,8 @@ func (s *Streams) run(ctx context.Context) {
 			case <-wake.C:
 				woke = wokeTimer
 			case <-s.sendTrigger.Notification(): // when new data to send
+				woke = wokeSend
+			case <-s.datagramTrigger.Notification(): // when a datagram is queued
 				woke = wokeSend
 			case <-s.updateWindow.Notification(): // when new recv window to update
 				woke = wokeWindow
@@ -761,6 +801,15 @@ func (s *Streams) run(ctx context.Context) {
 					ack = encodedAck
 				}
 			}
+		}
+		// Drained here, before anything else is popped, so a datagram taking the
+		// iteration cannot strand a stream/window/cancel that the branches below
+		// would have had to re-push. It also sits before the congestion gate,
+		// because the uncontrolled mode is defined by not being subject to it.
+		// The queue is shallow, so this cannot starve stream data for long, and
+		// a tunnel's payload is the latency-sensitive one.
+		if s.trySendDatagram(ack) {
+			continue
 		}
 		updateWindowStream := s.updateWindow.Pop()
 		cancelStream := s.cancelTrigger.Pop()
@@ -1009,6 +1058,127 @@ func (s *Streams) run(ctx context.Context) {
 	}
 }
 
+var (
+	// ErrDatagramTooLarge: the payload does not fit one packet. There is no
+	// fragmentation by design, so this is final for this payload -- the caller
+	// sends something smaller, or waits for PLPMTUD to raise MaxDatagramSize.
+	ErrDatagramTooLarge = errors.New("trsf: datagram exceeds MaxDatagramSize")
+	// ErrCongestionBlocked: the window was closed and this datagram was
+	// congestion controlled. It is DROPPED rather than parked, which is what
+	// the path would have done to it anyway.
+	ErrCongestionBlocked = errors.New("trsf: congestion window closed; datagram dropped")
+	// ErrDatagramQueueFull: the handoff queue to the run loop was full. The
+	// queue is shallow on purpose; a deep one would trade a visible drop for
+	// invisible latency.
+	ErrDatagramQueueFull = errors.New("trsf: datagram send queue full; datagram dropped")
+)
+
+// pendingDatagram is one payload waiting for the run loop, with the only thing
+// the loop still has to decide about it.
+type pendingDatagram struct {
+	payload []byte
+	exempt  bool
+}
+
+// datagramFrameOverhead is the kind byte StreamAppPacket puts in front of the
+// payload. Named so no consumer restates the arithmetic in MaxDatagramSize.
+const datagramFrameOverhead = 1
+
+// MaxDatagramSize is the largest payload that fits one packet RIGHT NOW. It
+// moves with PLPMTUD, so callers must read it rather than cache it, and it is
+// the reason this arithmetic lives here rather than in every consumer.
+func (s *Streams) MaxDatagramSize() int {
+	return s.mtu.CurrentMTU() - fixedOverhead - datagramFrameOverhead
+}
+
+// SendDatagram queues one payload, subject to congestion control.
+func (s *Streams) SendDatagram(b []byte) error { return s.sendDatagram(b, false) }
+
+// SendDatagramUncontrolled queues one payload OUTSIDE congestion control: it
+// neither waits for the window nor consumes it, and its loss takes no
+// congestion response.
+//
+// It is for senders whose rate is bounded by construction -- one packet per
+// request, one probe per period. A bulk sender here does not merely compete
+// unfairly with the network; it starves the congestion-controlled streams
+// sharing this very connection, because those are the only ones that yield.
+func (s *Streams) SendDatagramUncontrolled(b []byte) error { return s.sendDatagram(b, true) }
+
+func (s *Streams) sendDatagram(b []byte, exempt bool) error {
+	if len(b) > s.MaxDatagramSize() {
+		s.datagramsDroppedOversize.Add(1)
+		return ErrDatagramTooLarge
+	}
+	if !exempt && !s.sh.CanSend() {
+		s.datagramsDroppedCongest.Add(1)
+		return ErrCongestionBlocked
+	}
+	// Copied: the caller owns b and may reuse it the moment this returns.
+	payload := make([]byte, len(b))
+	copy(payload, b)
+	select {
+	case s.datagramSend <- pendingDatagram{payload: payload, exempt: exempt}:
+	default:
+		s.datagramsDroppedSendQueue.Add(1)
+		return ErrDatagramQueueFull
+	}
+	s.datagramTrigger.Notify()
+	return nil
+}
+
+// trySendDatagram drains at most one queued datagram and reports whether it
+// pushed a SendAction. Called from the run loop BEFORE the congestion gate,
+// because the uncontrolled mode is defined by not being subject to that gate.
+func (s *Streams) trySendDatagram(ack []byte) bool {
+	var dg pendingDatagram
+	select {
+	case dg = <-s.datagramSend:
+	default:
+		return false
+	}
+	if !dg.exempt && !s.sh.CanSend() {
+		// The window closed between the caller's check and this drain. Dropped,
+		// not parked: see sendDatagram.
+		s.datagramsDroppedCongest.Add(1)
+		return false
+	}
+	var pkt wire.StreamAppPacket
+	pkt.Header.Kind = wire.ApplicationPayloadKind_Datagram
+	pkt.SetDatagram(wire.DatagramPacket{Data: dg.payload})
+	encoded, err := pkt.EncodeCopy(nil)
+	if err != nil {
+		s.logger.Error("failed to encode datagram", "error", err)
+		return false
+	}
+	pn := s.pnIssuer.ConsumePacketNumber()
+	s.sh.OnSent(&SentPacket{
+		Kind:             wire.ApplicationPayloadKind_Datagram,
+		PacketNumber:     pn,
+		PacketSize:       fixedOverhead + len(encoded),
+		SentTime:         time.Now(),
+		CongestionExempt: dg.exempt,
+		// A datagram's loss IS evidence about the path: it is the only thing
+		// separating a drop out there from one this process made itself.
+		PathEvidence: true,
+		// Nothing re-sends this. Declining to re-queue in OnLost is not enough
+		// on its own -- see Retransmittable and declareLostUnretransmittable.
+		Retransmittable: false,
+		OnLost:          func(now time.Time) { s.datagramsLost.Add(1) },
+	})
+	if dg.exempt {
+		s.datagramsSentUncontrolled.Add(1)
+	} else {
+		s.datagramsSent.Add(1)
+	}
+	s.send.Push(&SendAction{
+		base:         s,
+		PacketNumber: pn,
+		Data:         encoded,
+		ACK:          ack,
+	})
+	return true
+}
+
 func (s *Streams) Send(msg *objproto.Message) {
 	s.recv.Push(msg)
 }
@@ -1100,10 +1270,13 @@ func NewStreams(ctx context.Context, isServer bool, initialMTU int, maxMTU int, 
 		// that has no retransmission to wait for anyway. Overflow drops and
 		// counts, the way a socket receive buffer does.
 		datagramRecv: make(chan []byte, 256),
-		isServer:     isServer,
-		logger:       logger,
-		pnIssuer:     pnIssuer,
-		mtu:          mtu.NewMTUTracker(initialMTU, maxMTU, 30*time.Second),
+		// Shallow: depth is latency for a payload nothing will retransmit.
+		datagramSend:    make(chan pendingDatagram, 32),
+		datagramTrigger: newTrigger(),
+		isServer:        isServer,
+		logger:          logger,
+		pnIssuer:        pnIssuer,
+		mtu:             mtu.NewMTUTracker(initialMTU, maxMTU, 30*time.Second),
 	}
 	s.recvStreamGraceNs.Store(int64(time.Minute))
 	if isServer {

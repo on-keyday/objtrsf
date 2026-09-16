@@ -122,3 +122,160 @@ func TestNoUnroutedTransportKindsOnAHealthyBuild(t *testing.T) {
 		t.Fatalf("UnroutedTransportKind = %d on a fresh connection, want 0", got)
 	}
 }
+
+// newLiveStreams builds a Streams whose run loop is running, which is what the
+// send path needs: SendDatagram only queues, and the loop is what emits.
+func newLiveStreams(t *testing.T) *Streams {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return NewStreams(ctx, false, DefaultInitialMTU, DefaultMaxMTU, &stubPNIssuer{}, logger).(*Streams)
+}
+
+// fillCongestionWindow puts enough in flight that CanSend() is false. It uses
+// the handler directly rather than real streams so the test states the
+// condition it needs instead of arranging it by side effect.
+func fillCongestionWindow(t *testing.T, s *Streams) {
+	t.Helper()
+	for i := 0; s.sh.CanSend() && i < 1000; i++ {
+		s.sh.OnSent(&SentPacket{
+			PacketNumber:    objproto.PacketNumber(100000 + i),
+			PacketSize:      DefaultInitialMTU,
+			SentTime:        time.Now(),
+			Kind:            wire.ApplicationPayloadKind_StreamData,
+			PathEvidence:    true,
+			Retransmittable: true,
+			OnLost:          func(now time.Time) {},
+		})
+	}
+	if s.sh.CanSend() {
+		t.Fatal("setup: could not close the congestion window")
+	}
+}
+
+// nextDatagramAction drains SendActions until one carries a datagram, so the
+// assertion does not race the MTU probe the loop also emits.
+func nextDatagramAction(t *testing.T, s *Streams) []byte {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	for range 16 {
+		action := s.Recv(ctx)
+		if action == nil {
+			t.Fatal("the run loop produced no further SendAction before the deadline")
+		}
+		if action.Data == nil {
+			continue
+		}
+		var pkt wire.StreamAppPacket
+		if err := pkt.DecodeExact(action.Data); err != nil {
+			continue
+		}
+		if dg := pkt.Datagram(); dg != nil {
+			return dg.Data
+		}
+	}
+	t.Fatal("no datagram appeared among the emitted SendActions")
+	return nil
+}
+
+// The size ceiling is trsf's to state, so no consumer restates
+// CurrentMTU - fixedOverhead - frame header. An oversized payload is refused
+// outright -- there is no fragmentation by design -- and counted, because
+// otherwise nothing would explain why a tunnel drops large packets.
+func TestMaxDatagramSizeRefusesAndCountsOversize(t *testing.T) {
+	s := newLiveStreams(t)
+	max := s.MaxDatagramSize()
+	if max != DefaultInitialMTU-fixedOverhead-datagramFrameOverhead {
+		t.Fatalf("MaxDatagramSize() = %d, want %d", max, DefaultInitialMTU-fixedOverhead-datagramFrameOverhead)
+	}
+
+	if err := s.SendDatagram(make([]byte, max+1)); err != ErrDatagramTooLarge {
+		t.Fatalf("oversized send returned %v, want ErrDatagramTooLarge", err)
+	}
+	if got := s.GetInternalState().DatagramsDroppedOversize; got != 1 {
+		t.Fatalf("DatagramsDroppedOversize = %d, want 1", got)
+	}
+}
+
+// A controlled datagram meeting a closed window is DROPPED, not parked.
+// Parking trades a visible drop for invisible latency and unbounded buffering,
+// and for a tunnel the drop is what the path would have done anyway.
+func TestControlledDatagramIsDroppedWhenTheWindowIsClosed(t *testing.T) {
+	s := newLiveStreams(t)
+	fillCongestionWindow(t, s)
+
+	if err := s.SendDatagram([]byte("payload")); err != ErrCongestionBlocked {
+		t.Fatalf("send with a closed window returned %v, want ErrCongestionBlocked", err)
+	}
+	st := s.GetInternalState()
+	if st.DatagramsDroppedCongestion != 1 {
+		t.Errorf("DatagramsDroppedCongestion = %d, want 1", st.DatagramsDroppedCongestion)
+	}
+	if st.DatagramsSent != 0 {
+		t.Errorf("DatagramsSent = %d, want 0: the payload was dropped, not sent", st.DatagramsSent)
+	}
+}
+
+// The uncontrolled mode exists precisely so a bounded-rate sender is not made
+// to wait on a window it is not part of. The payload must actually reach the
+// wire, which means the loop's drain has to sit before the congestion gate.
+func TestUncontrolledDatagramIsSentWithTheWindowClosed(t *testing.T) {
+	s := newLiveStreams(t)
+	fillCongestionWindow(t, s)
+
+	payload := []byte("uncontrolled payload")
+	if err := s.SendDatagramUncontrolled(payload); err != nil {
+		t.Fatalf("uncontrolled send with a closed window: %v", err)
+	}
+
+	if got := nextDatagramAction(t, s); string(got) != string(payload) {
+		t.Fatalf("emitted payload = %q, want %q", got, payload)
+	}
+	if got := s.GetInternalState().DatagramsSentUncontrolled; got != 1 {
+		t.Fatalf("DatagramsSentUncontrolled = %d, want 1", got)
+	}
+}
+
+// The ordinary path: an open window, and the payload comes out intact.
+func TestControlledDatagramReachesTheWire(t *testing.T) {
+	s := newLiveStreams(t)
+	payload := []byte("controlled payload")
+	if err := s.SendDatagram(payload); err != nil {
+		t.Fatalf("SendDatagram: %v", err)
+	}
+
+	if got := nextDatagramAction(t, s); string(got) != string(payload) {
+		t.Fatalf("emitted payload = %q, want %q", got, payload)
+	}
+	st := s.GetInternalState()
+	if st.DatagramsSent != 1 {
+		t.Errorf("DatagramsSent = %d, want 1", st.DatagramsSent)
+	}
+	if st.DatagramsSentUncontrolled != 0 {
+		t.Errorf("DatagramsSentUncontrolled = %d, want 0", st.DatagramsSentUncontrolled)
+	}
+}
+
+// A sent datagram occupies the window when it is controlled, and does not when
+// it is not. This is the property the two modes are named for.
+func TestOnlyControlledDatagramsOccupyTheWindow(t *testing.T) {
+	controlled := newLiveStreams(t)
+	if err := controlled.SendDatagram([]byte("payload")); err != nil {
+		t.Fatalf("SendDatagram: %v", err)
+	}
+	nextDatagramAction(t, controlled)
+	if got := controlled.GetInternalState().BytesInFlight; got == 0 {
+		t.Error("a congestion-controlled datagram left BytesInFlight at 0: it is not occupying the window it is subject to")
+	}
+
+	uncontrolled := newLiveStreams(t)
+	if err := uncontrolled.SendDatagramUncontrolled([]byte("payload")); err != nil {
+		t.Fatalf("SendDatagramUncontrolled: %v", err)
+	}
+	nextDatagramAction(t, uncontrolled)
+	if got := uncontrolled.GetInternalState().BytesInFlight; got != 0 {
+		t.Errorf("BytesInFlight = %d after an uncontrolled datagram, want 0", got)
+	}
+}
