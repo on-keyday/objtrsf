@@ -184,6 +184,12 @@ type InternalSentPacket struct {
 	SentTime   time.Time
 	PacketSize int
 	IsMTUProbe bool
+	// The three properties IsMTUProbe used to stand in for. Carried out here
+	// because a reader of this snapshot asking "why is this packet not counted
+	// in BytesInFlight" has no other way to tell an exempt datagram from a probe.
+	CongestionExempt bool
+	PathEvidence     bool
+	Retransmittable  bool
 }
 
 type InternalState struct {
@@ -756,11 +762,13 @@ func (s *Streams) run(ctx context.Context) {
 		if cancelStream != nil && !cancelStream.EOF() {
 			pn := s.pnIssuer.ConsumePacketNumber()
 			s.sh.OnSent(&SentPacket{
-				Kind:         wire.ApplicationPayloadKind_StreamCancel,
-				PacketNumber: pn,
-				StreamID:     cancelStream.id,
-				PacketSize:   fixedOverhead + payloadOverhead,
-				SentTime:     time.Now(),
+				Kind:            wire.ApplicationPayloadKind_StreamCancel,
+				PacketNumber:    pn,
+				StreamID:        cancelStream.id,
+				PacketSize:      fixedOverhead + payloadOverhead,
+				SentTime:        time.Now(),
+				PathEvidence:    true,
+				Retransmittable: true,
 				OnLost: func(now time.Time) {
 					if cancelStream.EOF() {
 						return
@@ -812,10 +820,12 @@ func (s *Streams) run(ctx context.Context) {
 					}
 					s.updateWindow.Push(updateWindowStream)
 				},
-				PacketNumber: pn,
-				StreamID:     updateWindowStream.id,
-				PacketSize:   fixedOverhead + payloadOverhead,
-				SentTime:     time.Now(),
+				PacketNumber:    pn,
+				StreamID:        updateWindowStream.id,
+				PacketSize:      fixedOverhead + payloadOverhead,
+				SentTime:        time.Now(),
+				PathEvidence:    true,
+				Retransmittable: true,
 			})
 			encodedID, ok := wire.EncodeVarint(uint64(updateWindowStream.id))
 			if !ok {
@@ -852,13 +862,15 @@ func (s *Streams) run(ctx context.Context) {
 			if sentRange != nil {
 				pn := s.pnIssuer.ConsumePacketNumber()
 				s.sh.OnSent(&SentPacket{
-					Kind:         wire.ApplicationPayloadKind_StreamData,
-					OnACK:        sentRange.OnACK,
-					OnLost:       sentRange.OnLost,
-					PacketNumber: pn,
-					StreamID:     stream.id,
-					PacketSize:   fixedOverhead + payloadOverhead + len(sentRange.Data),
-					SentTime:     time.Now(),
+					Kind:            wire.ApplicationPayloadKind_StreamData,
+					OnACK:           sentRange.OnACK,
+					OnLost:          sentRange.OnLost,
+					PacketNumber:    pn,
+					StreamID:        stream.id,
+					PacketSize:      fixedOverhead + payloadOverhead + len(sentRange.Data),
+					SentTime:        time.Now(),
+					PathEvidence:    true,
+					Retransmittable: true,
 				})
 				pkt := wire.StreamPacket{}
 				if stream.id != 0 {
@@ -906,7 +918,16 @@ func (s *Streams) run(ctx context.Context) {
 				PacketSize:   probe,
 				SentTime:     probeTime,
 				IsMTUProbe:   true,
-				StreamID:     0,
+				// All three stated, because this is the packet whose
+				// classification the split was about. Exempt: a probe must never
+				// reach congestion control. Not evidence: its loss is the probe's
+				// answer about SIZE, not a statement about the path. Not
+				// retransmittable: MTUTracker issues the next attempt itself, at
+				// a size of its own choosing.
+				CongestionExempt: true,
+				PathEvidence:     false,
+				Retransmittable:  false,
+				StreamID:         0,
 				OnACK: func(now time.Time) {
 					s.mtu.OnACK(now)
 				},

@@ -31,6 +31,13 @@ type SentPacketHandler struct {
 	// connection.
 	mtuProbesOutstanding int
 
+	// exemptOutstanding counts congestion-exempt packets sitting in sentRanges
+	// whose loss is still worth detecting. It exists for exactly the reason
+	// mtuProbesOutstanding does, and generalises it: such a packet is absent
+	// from bytesInFlight, so without a term of its own setLossDetectionTimer
+	// stops the timer while it is still outstanding and its OnLost never fires.
+	exemptOutstanding int
+
 	sentRanges []*SentPacket
 	logger     *slog.Logger
 	rtt        *congestion.RTTStats
@@ -61,7 +68,7 @@ type SentPacketHandler struct {
 // that the window pays for.
 type LossStats struct {
 	Events   int // congestion responses taken (RecordLoss calls)
-	Packets  int // non-probe packets declared lost
+	Packets  int // packets declared lost that were PathEvidence
 	Spurious int // ...of which an ACK arrived afterwards
 }
 
@@ -117,6 +124,12 @@ func NewSentPacketHandler(logger *slog.Logger, rtt *congestion.RTTStats, cong co
 	}
 }
 
+// SentPacket describes one packet awaiting a verdict. Four of its fields are
+// independent properties that an MTU probe happened to share, and that used to
+// ride IsMTUProbe alone. They came apart because a datagram wants some of them
+// and not others -- notably it wants to be exempt from congestion control while
+// still being evidence about the path, which is the combination a single flag
+// could not express.
 type SentPacket struct {
 	OnACK        func(now time.Time)
 	OnLost       func(now time.Time)
@@ -124,8 +137,35 @@ type SentPacket struct {
 	StreamID     StreamID
 	PacketNumber objproto.PacketNumber
 	SentTime     time.Time
-	IsMTUProbe   bool
-	Kind         wire.ApplicationPayloadKind
+
+	// CongestionExempt keeps this packet out of the congestion controller
+	// entirely: bytesInFlight, RecordSend, RecordACK and RecordLoss. An MTU
+	// probe and an uncontrolled datagram set it.
+	CongestionExempt bool
+
+	// PathEvidence says this packet's fate tells us something about the path,
+	// so its loss belongs in loss.Packets and in the spurious accounting. An
+	// MTU probe CLEARS it -- a probe's loss is the probe's answer about size,
+	// not a statement about the path -- while a datagram sets it, because a
+	// datagram's loss is the only thing separating a path drop from one this
+	// process made itself.
+	PathEvidence bool
+
+	// Retransmittable says something will re-send this packet's contents if it
+	// is declared lost, which is what lets PTO leave it in sentRanges and try
+	// again. Clearing it does two things that the OnLost callback alone cannot:
+	// PTO stops choosing it as the packet to retransmit, and it is RETIRED when
+	// its loss is declared, so a later expiry cannot report the same packet as
+	// a second loss. See declareLostUnretransmittable.
+	Retransmittable bool
+
+	// IsMTUProbe now means only "this is an MTU probe", for mtuProbesOutstanding
+	// and for the tracker's own bookkeeping. It no longer decides congestion
+	// participation, loss evidence, or retransmission; a probe states those
+	// three separately.
+	IsMTUProbe bool
+
+	Kind wire.ApplicationPayloadKind
 }
 
 // GetInternal reports the handler's own state. The RTT stats travel as one
@@ -138,11 +178,14 @@ func (ah *SentPacketHandler) GetInternal() ([]InternalSentPacket, int, int, cong
 	var sentRanges []InternalSentPacket = make([]InternalSentPacket, 0, len(ah.sentRanges))
 	for _, p := range ah.sentRanges {
 		sentRanges = append(sentRanges, InternalSentPacket{
-			SentTime:   p.SentTime,
-			PacketSize: p.PacketSize,
-			IsMTUProbe: p.IsMTUProbe,
-			Kind:       p.Kind,
-			StreamID:   p.StreamID,
+			SentTime:         p.SentTime,
+			PacketSize:       p.PacketSize,
+			IsMTUProbe:       p.IsMTUProbe,
+			CongestionExempt: p.CongestionExempt,
+			PathEvidence:     p.PathEvidence,
+			Retransmittable:  p.Retransmittable,
+			Kind:             p.Kind,
+			StreamID:         p.StreamID,
 		})
 	}
 	return sentRanges, ah.bytesInFlight, ah.cong.GetCongestionWindow(), *ah.rtt, ah.loss
@@ -195,8 +238,8 @@ func (ah *SentPacketHandler) auditBytesInFlight(msg string, prev int) {
 	sentRanges := make([]int, len(ah.sentRanges))
 	sum := 0
 	for i := range ah.sentRanges {
-		if ah.sentRanges[i].IsMTUProbe {
-			continue // ignore MTU probes
+		if ah.sentRanges[i].CongestionExempt {
+			continue // never entered bytesInFlight, so it is not part of the sum
 		}
 		sentRanges[i] = int(ah.sentRanges[i].PacketSize)
 		sum += int(ah.sentRanges[i].PacketSize)
@@ -211,10 +254,16 @@ func (ah *SentPacketHandler) OnSent(s *SentPacket) error {
 	ah.m.Lock()
 	defer ah.m.Unlock()
 	ah.sentRanges = append(ah.sentRanges, s)
-	if !s.IsMTUProbe {
+	// Two independent conditions, not an if/else: congestion participation and
+	// probe bookkeeping used to be the same branch, which is what made a
+	// congestion-exempt non-probe impossible to express.
+	if !s.CongestionExempt {
 		ah.addBytesInFlight(s.PacketSize)
 		ah.cong.RecordSend(s.PacketSize, s.SentTime)
 	} else {
+		ah.exemptOutstanding++
+	}
+	if s.IsMTUProbe {
 		ah.mtuProbesOutstanding++
 	}
 	ah.largestSent = max(ah.largestSent, s.PacketNumber)
@@ -269,20 +318,23 @@ func (ah *SentPacketHandler) detectAck(rcvTime time.Time, ranges []Range) ([]*Se
 	}
 	ah.sentRanges = newRemainPackets
 	sentSize := 0
-	probeSize := 0
+	exemptSize := 0
 
 	for _, p := range ackedPackets {
 		sentSize += p.PacketSize
 		if p.OnACK != nil {
 			p.OnACK(rcvTime)
 		}
+		if p.CongestionExempt {
+			exemptSize += p.PacketSize
+			ah.exemptOutstanding--
+		}
 		if p.IsMTUProbe {
-			probeSize += p.PacketSize
 			ah.mtuProbesOutstanding--
 		}
 	}
 	if len(ackedPackets) > 0 {
-		ah.removeBytesInFlight(sentSize - probeSize)
+		ah.removeBytesInFlight(sentSize - exemptSize)
 		ah.cong.RecordACK(sentSize, rcvTime)
 	}
 	return ackedPackets, nil
@@ -310,8 +362,10 @@ func (ah *SentPacketHandler) detectLost(now time.Time) {
 	remainRanges := ah.sentRanges[:0]
 	lostSize := 0
 	lostCount := 0
-	mtuProbe := 0
-	probeSize := 0
+	exemptSize := 0
+	congestionLostSize := 0
+	congestionLostCount := 0
+	evidenceCount := 0
 	for _, p := range ah.sentRanges {
 		if p.PacketNumber > ah.largestAcked {
 			remainRanges = append(remainRanges, p)
@@ -334,14 +388,23 @@ func (ah *SentPacketHandler) detectLost(now time.Time) {
 				p.OnLost(now) // maybe queueing
 			}
 			lostCount++
-			if p.IsMTUProbe {
-				mtuProbe++
-				probeSize += p.PacketSize
-				ah.mtuProbesOutstanding--
+			if p.CongestionExempt {
+				exemptSize += p.PacketSize
+				ah.exemptOutstanding--
 			} else {
-				// MTU probes are expected to be lost — that is how the probe
-				// reports a too-large MTU — so they are not evidence about the
-				// path and do not belong in the spurious count either.
+				congestionLostSize += p.PacketSize
+				congestionLostCount++
+			}
+			if p.IsMTUProbe {
+				ah.mtuProbesOutstanding--
+			}
+			// MTU probes are expected to be lost — that is how the probe
+			// reports a too-large MTU — so they are not evidence about the
+			// path and do not belong in the spurious count either. A
+			// datagram's loss IS evidence about the path, which is why this
+			// is now its own property rather than "not a probe".
+			if p.PathEvidence {
+				evidenceCount++
 				ah.rememberDeclaredLost(p.PacketNumber)
 			}
 		} else {
@@ -356,11 +419,14 @@ func (ah *SentPacketHandler) detectLost(now time.Time) {
 	}
 	ah.sentRanges = remainRanges
 	if somePacketLost {
-		ah.removeBytesInFlight(lostSize - probeSize)
-		ah.loss.Packets += lostCount - mtuProbe
-		if lostCount > mtuProbe { // ignore congestion for MTU probes
+		ah.removeBytesInFlight(lostSize - exemptSize)
+		// Two gates, not one. Evidence and congestion response used to be
+		// decided together by "was it a probe"; an uncontrolled datagram's loss
+		// belongs in the first and must stay out of the second.
+		ah.loss.Packets += evidenceCount
+		if congestionLostCount > 0 {
 			ah.loss.Events++
-			ah.cong.RecordLoss(lostSize-probeSize, now)
+			ah.cong.RecordLoss(congestionLostSize, now)
 		}
 	}
 }
@@ -372,10 +438,14 @@ func (ah *SentPacketHandler) setLossDetectionTimer(now time.Time) {
 		ah.multiModalTimer = ah.lossTime
 		return
 	}
-	// An outstanding MTU probe arms the timer even though it contributes no
-	// bytesInFlight: it is the only thing that will ever declare that probe
-	// lost. See mtuProbesOutstanding.
-	if ah.bytesInFlight == 0 && ah.mtuProbesOutstanding == 0 {
+	// An outstanding congestion-exempt packet sets the timer even though it
+	// contributes no bytesInFlight: this timer is the only thing that will ever
+	// declare it lost. MTU probes were the first such packet and are still
+	// counted separately, because their retirement is the tracker's business;
+	// exemptOutstanding covers every other one. Stopping the timer here while
+	// either is outstanding leaves the run loop parked with no deadline, and
+	// that packet's OnLost never fires.
+	if ah.bytesInFlight == 0 && ah.mtuProbesOutstanding == 0 && ah.exemptOutstanding == 0 {
 		ah.logger.Debug("No packets in flight, disable loss timer")
 		ah.multiModalTimer = time.Time{}
 		return
@@ -385,34 +455,39 @@ func (ah *SentPacketHandler) setLossDetectionTimer(now time.Time) {
 	ah.multiModalTimer = now.Add(pto)
 }
 
-// declareLostMTUProbes retires every outstanding MTU probe and reports how
-// many it retired.
+// declareLostUnretransmittable retires every outstanding packet that nothing
+// will re-send, and reports how many it retired.
 //
-// A probe's timer expiry IS its loss declaration, which is not how a data
-// packet is treated: for data, PTO only prompts a retransmission and leaves
-// the packet in sentRanges, still eligible to be acked later. A probe cannot
-// be handled that way for two reasons. Nothing retransmits it -- MTUTracker
-// issues the next attempt itself, at a size of its own choosing -- and
-// leaving it in sentRanges would let the following expiry report the SAME
-// probe as a second loss, so three expiries would collapse the tracker's
-// upper bound below the true path MTU without a single extra packet having
-// been put on the path.
+// For such a packet the timer expiry IS its loss declaration, which is not how
+// a retransmittable packet is treated: for those, PTO only prompts a
+// retransmission and leaves the packet in sentRanges, still eligible to be
+// acked later. That treatment is unavailable here for two reasons, and both
+// were first written down about MTU probes. Nothing retransmits it -- MTUTracker
+// issues the next probe itself, at a size of its own choosing, and a datagram
+// is simply gone -- and leaving it in sentRanges would let the following expiry
+// report the SAME packet as a second loss. For a probe that meant three
+// expiries could collapse the tracker's upper bound below the true path MTU
+// without a single extra packet having been put on the path; for a datagram it
+// would mean one drop counted many times.
 //
-// No bytes leave bytesInFlight and no congestion response is taken: a probe
-// was never counted there, and its loss reports a size limit rather than
-// anything about the path's capacity.
-func (ah *SentPacketHandler) declareLostMTUProbes(now time.Time) int {
-	if ah.mtuProbesOutstanding == 0 {
-		return 0
-	}
-	// Filtered in place, like detectAck and detectLost. OnLost on a probe only
-	// touches MTUTracker, so it cannot mutate this slice while the loop walks
-	// it.
+// What differs between the two is congestion, and the fields say which is
+// which. A probe was never in bytesInFlight and reports a size limit rather
+// than anything about capacity, so no bytes leave and no response is taken. A
+// CONGESTION-CONTROLLED datagram was in flight and its loss is a real signal,
+// so it pays both.
+func (ah *SentPacketHandler) declareLostUnretransmittable(now time.Time) int {
+	// Deliberately not guarded by a counter the way this was when it only
+	// handled probes: three classes now qualify, a guard would need to track
+	// all of them in step, and this runs once per PTO expiry over a slice
+	// bounded by the congestion window.
 	origLen := len(ah.sentRanges)
 	remain := ah.sentRanges[:0]
 	lost := 0
+	congestionLostSize := 0
+	congestionLostCount := 0
+	evidenceCount := 0
 	for _, p := range ah.sentRanges {
-		if !p.IsMTUProbe {
+		if p.Retransmittable {
 			remain = append(remain, p)
 			continue
 		}
@@ -420,13 +495,33 @@ func (ah *SentPacketHandler) declareLostMTUProbes(now time.Time) int {
 		if p.OnLost != nil {
 			p.OnLost(now)
 		}
+		if p.CongestionExempt {
+			ah.exemptOutstanding--
+		} else {
+			congestionLostSize += p.PacketSize
+			congestionLostCount++
+		}
+		if p.IsMTUProbe {
+			ah.mtuProbesOutstanding--
+		}
+		if p.PathEvidence {
+			evidenceCount++
+			ah.rememberDeclaredLost(p.PacketNumber)
+		}
 	}
 	for i := len(remain); i < origLen; i++ {
 		ah.sentRanges[i] = nil
 	}
 	ah.sentRanges = remain
-	ah.mtuProbesOutstanding -= lost
-	ah.logger.Debug("MTU probe timed out", "probes", lost)
+	if congestionLostCount > 0 {
+		ah.removeBytesInFlight(congestionLostSize)
+		ah.loss.Events++
+		ah.cong.RecordLoss(congestionLostSize, now)
+	}
+	ah.loss.Packets += evidenceCount
+	if lost > 0 {
+		ah.logger.Debug("unretransmittable packets expired", "count", lost)
+	}
 	return lost
 }
 
@@ -446,19 +541,21 @@ func (ah *SentPacketHandler) OnTimeout(now time.Time) (bool, error) {
 	// However, there's no way to reset the timer in the connection.
 	// When OnLossDetectionTimeout is called, we therefore need to make sure that there are
 	// actually packets outstanding.
-	// An outstanding MTU probe expires HERE, and nowhere else. Probes are kept
-	// out of bytesInFlight, which also keeps them out of every ACK-driven
-	// detectLost pass: that one skips everything above largestAcked, and a
-	// probe sent with no data behind it is always above it.
-	lostProbes := ah.declareLostMTUProbes(now)
+	// An outstanding unretransmittable packet expires HERE, and nowhere else,
+	// whenever it sits above largestAcked: the ACK-driven detectLost pass skips
+	// everything above that line, and a packet sent with no data behind it is
+	// always above it. An MTU probe is the original case; a datagram that
+	// nothing acknowledged is the same shape.
+	lostUnretransmittable := ah.declareLostUnretransmittable(now)
 
+	// Read AFTER the call above: retiring a congestion-controlled datagram
+	// removes its bytes, so this can legitimately become zero here.
 	if ah.bytesInFlight == 0 {
-		if lostProbes > 0 {
-			// The probe was the only thing outstanding, so retiring it above
-			// was the whole point of this expiry. ptoCount is deliberately not
-			// advanced: a probe loss is a statement about size, not about the
-			// path, and inflating the PTO backoff on it would slow the next
-			// real retransmission.
+		if lostUnretransmittable > 0 {
+			// Those packets were the only things outstanding, so retiring them
+			// above was the whole point of this expiry. ptoCount is deliberately
+			// not advanced: nothing here can be retransmitted, so inflating the
+			// PTO backoff would only slow the next real retransmission.
 			return false, nil
 		}
 		return false, errors.New("BUG: no packets in flight")
@@ -469,11 +566,11 @@ func (ah *SentPacketHandler) OnTimeout(now time.Time) (bool, error) {
 	}
 	ah.ptoCount++
 	ah.logger.Debug("PTO fired, try retransmission")
-	// declareLostMTUProbes has already retired every probe, so this finds a
-	// data packet on the first entry. The filter is kept because the guarantee
-	// lives in another function.
+	// declareLostUnretransmittable has already retired everything that cannot
+	// be re-sent, so this finds a retransmittable packet on the first entry.
+	// The filter is kept because the guarantee lives in another function.
 	for _, p := range ah.sentRanges {
-		if !p.IsMTUProbe {
+		if p.Retransmittable {
 			p.OnLost(now) // trigger retransmission
 			return true, nil
 		}
