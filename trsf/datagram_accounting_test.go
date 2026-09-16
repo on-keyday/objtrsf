@@ -211,6 +211,43 @@ func TestPTORetransmitsOnlyRetransmittablePackets(t *testing.T) {
 	}
 }
 
+// An exempt packet's bytes never entered the window, so acknowledging them must
+// not grow it. The send side already excludes them from RecordSend and the loss
+// side from RecordLoss; ACK was the odd one out. At one MTU probe per 30s
+// reprobe period that was unmeasurable, but a high-rate uncontrolled sender
+// would inflate the window of the controlled streams sharing its connection --
+// a flow that ignores congestion enlarging everyone else's share.
+func TestExemptAckDoesNotGrowCongestionWindow(t *testing.T) {
+	sh, _ := newHandlerWithOne(t, uncontrolledDatagram())
+	_, _, cwndBefore, _, _ := sh.GetInternal()
+
+	if err := sh.ReceiveACK(time.Now(), []Range{{Begin: 0, End: 1}}, 0); err != nil {
+		t.Fatalf("ReceiveACK: %v", err)
+	}
+
+	_, inFlight, cwndAfter, _, _ := sh.GetInternal()
+	if cwndAfter != cwndBefore {
+		t.Errorf("cwnd %d -> %d on acking a congestion-exempt packet: it grew on bytes that never occupied it", cwndBefore, cwndAfter)
+	}
+	if inFlight != 0 {
+		t.Errorf("bytesInFlight = %d, want 0: retiring an exempt packet must not subtract from a window it never entered", inFlight)
+	}
+}
+
+// The control: a packet that DID occupy the window still grows it on ACK.
+func TestControlledAckStillGrowsCongestionWindow(t *testing.T) {
+	sh, _ := newHandlerWithOne(t, controlledDatagram())
+	_, _, cwndBefore, _, _ := sh.GetInternal()
+
+	if err := sh.ReceiveACK(time.Now(), []Range{{Begin: 0, End: 1}}, 0); err != nil {
+		t.Fatalf("ReceiveACK: %v", err)
+	}
+
+	if _, _, cwndAfter, _, _ := sh.GetInternal(); cwndAfter <= cwndBefore {
+		t.Fatalf("cwnd %d -> %d: a packet that occupied the window must still grow it", cwndBefore, cwndAfter)
+	}
+}
+
 // mustSentPackets returns the handler's outstanding set.
 func mustSentPackets(sh *SentPacketHandler) []InternalSentPacket {
 	packets, _, _, _, _ := sh.GetInternal()

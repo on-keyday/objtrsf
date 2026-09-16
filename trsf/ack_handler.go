@@ -334,8 +334,15 @@ func (ah *SentPacketHandler) detectAck(rcvTime time.Time, ranges []Range) ([]*Se
 		}
 	}
 	if len(ackedPackets) > 0 {
+		// Both terms exclude the exempt bytes, and for the same reason: they
+		// never occupied the window. RecordACK used to take the full sentSize
+		// while RecordSend and RecordLoss already excluded them, so the window
+		// grew on bytes that had cost it nothing. At one MTU probe per reprobe
+		// period that was unmeasurable; with an uncontrolled datagram sender at
+		// rate it would let a flow that ignores congestion enlarge the window of
+		// the controlled streams sharing this connection.
 		ah.removeBytesInFlight(sentSize - exemptSize)
-		ah.cong.RecordACK(sentSize, rcvTime)
+		ah.cong.RecordACK(sentSize-exemptSize, rcvTime)
 	}
 	return ackedPackets, nil
 }
