@@ -108,15 +108,48 @@ enum ApplicationPayloadKind:
     stream_cancel
     stream_ack
     stream_window_update
+    datagram
 
+
+# DatagramPacket carries one unreliable application payload: delivered at most
+# once, never retransmitted, but acknowledged like stream data so the sender can
+# tell a drop from an arrival.
+#
+# It is transport-owned rather than a consumer kind at >= USER_DEFINED_START,
+# and that placement is the whole point. AutoReceive hands consumer kinds
+# straight to the application seam without their packet number ever reaching
+# PacketNumTracker, so a payload carried there can never be ACKed and its loss
+# can never be observed.
+#
+# There is no length field. objproto does not split an application message, so
+# one datagram is exactly one packet and rest-of-packet is exact.
+#
+# Congestion mode is deliberately NOT on the wire. Whether the sender counted
+# this packet against its own window is the sender's property; the receiver
+# acknowledges both modes identically, so a bit here would offer the receiver a
+# choice it does not have.
+format DatagramPacket:
+    data :[..]u8
 
 format PacketHeader:
     kind :ApplicationPayloadKind
 
+# isStreamRelated answers "does the run loop handle this kind", which is what
+# its one caller (AutoReceive) asks of it. The name describes the membership it
+# had when every such kind was a stream kind; a datagram qualifies because
+# StreamAppPacket decodes it and handlePacket dispatches it, not because it is
+# stream-related.
+#
+# This membership must equal StreamAppPacket's arms below. is_defined cannot
+# derive that -- it answers enum membership and this is a SUBSET -- so the two
+# lists are kept in step by hand. The expensive direction is a kind added to the
+# union but not here: it reaches onEvent and vanishes with no error anywhere,
+# which is what the transport-range guard in AutoReceive exists to catch.
 fn isStreamRelated(kind :ApplicationPayloadKind) -> bool:
     return match kind:
         ApplicationPayloadKind.stream_data,ApplicationPayloadKind.stream_cancel,
-        ApplicationPayloadKind.stream_ack, ApplicationPayloadKind.stream_window_update => true
+        ApplicationPayloadKind.stream_ack, ApplicationPayloadKind.stream_window_update,
+        ApplicationPayloadKind.datagram => true
         .. => false
 
 format StreamAppPacket:
@@ -127,4 +160,5 @@ format StreamAppPacket:
         ApplicationPayloadKind.stream_cancel => stream_cancel :CancelStreamPacket
         ApplicationPayloadKind.stream_ack => stream_ack :StreamACKPacket
         ApplicationPayloadKind.stream_window_update => window_update :UpdateWindow
+        ApplicationPayloadKind.datagram => datagram :DatagramPacket
         .. => error("Unexpected packet")
