@@ -80,6 +80,10 @@ type Transport interface {
 	Multiplexer
 	Send(msg *objproto.Message)
 	Recv(ctx context.Context) *SendAction
+	// ReceiveDatagram returns the next unreliable payload. Datagrams carry no
+	// stream id and are ordered against nothing; the consumer's own framing is
+	// what gives a payload meaning.
+	ReceiveDatagram(ctx context.Context) ([]byte, error)
 }
 
 func AutoSend(ctx context.Context, p Transport, conn UnderlayingSendTransport, onEnd func(err error)) {
@@ -184,6 +188,20 @@ func AutoReceive(ctx context.Context, p Transport, conn UnderlayingBidirectional
 		if wire.IsStreamRelated(kind) {
 			p.Send(data)
 			continue
+		}
+		// Everything the transport owns is either handled just below
+		// (ping/pong/close) or routed to the run loop just above. A
+		// transport-range kind that gets past both is a routing bug, not a
+		// payload: the schema's predicate and its union have drifted apart, and
+		// the packet is about to be handed to an application that does not know
+		// the kind and will drop it without a word. Say so where it happens.
+		if uint8(kind) < wire.USER_DEFINED_START &&
+			kind != wire.ApplicationPayloadKind_Ping &&
+			kind != wire.ApplicationPayloadKind_Pong &&
+			kind != wire.ApplicationPayloadKind_Close {
+			if s, ok := p.(*Streams); ok {
+				s.noteUnroutedTransportKind(kind)
+			}
 		}
 		if kind == wire.ApplicationPayloadKind_Ping {
 			if cfg.manualPing {

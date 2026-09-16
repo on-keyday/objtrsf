@@ -169,6 +169,22 @@ type Streams struct {
 	// deduplicated; after removal a stray packet would materialize a fresh
 	// entry via getRecvStream. Default one minute (≫ any RTO).
 	recvStreamGraceNs atomic.Int64
+
+	// datagramRecv is bounded and drops the NEWEST on overflow, which is what a
+	// socket receive buffer does. Blocking here is not an option: a datagram is
+	// never retransmitted, so waiting for a reader would convert one slow
+	// consumer into latency for every other packet the run loop still has to
+	// demultiplex.
+	datagramRecv        chan []byte
+	datagramsReceived   atomic.Uint64
+	datagramsDroppedRcv atomic.Uint64
+
+	// unroutedTransportKind counts transport-owned kinds that reached the
+	// application seam in AutoReceive. That cannot happen while
+	// isStreamRelated's membership matches StreamAppPacket's arms, so a nonzero
+	// value means those two lists have drifted and some kind is being dropped
+	// silently. See noteUnroutedTransportKind.
+	unroutedTransportKind atomic.Uint64
 }
 
 // SetRecvStreamRemovalGrace overrides the grace period between a recv
@@ -264,6 +280,18 @@ type InternalState struct {
 	SendPushCwnd  uint64
 	SendPushLoss  uint64
 	SendPushOther uint64
+
+	// Datagram accounting. DatagramsDroppedReceiveQueue is the local receive
+	// buffer overflowing, which is a DIFFERENT fact from a packet lost on the
+	// path (that one is in Loss) -- a consumer that cannot tell them apart
+	// starts every diagnosis at the wrong layer.
+	DatagramsReceived            uint64
+	DatagramsDroppedReceiveQueue uint64
+
+	// UnroutedTransportKind must stay zero. Nonzero means a transport-owned
+	// kind reached the application seam, i.e. the schema's routing predicate and
+	// its union have drifted apart and packets are being dropped in silence.
+	UnroutedTransportKind uint64
 }
 
 func (s *Streams) GetInternalState() *InternalState {
@@ -309,6 +337,10 @@ func (s *Streams) GetInternalState() *InternalState {
 		SendPushCwnd:         pushes[pushCwnd],
 		SendPushLoss:         pushes[pushLoss],
 		SendPushOther:        pushes[pushOther],
+
+		DatagramsReceived:            s.datagramsReceived.Load(),
+		DatagramsDroppedReceiveQueue: s.datagramsDroppedRcv.Load(),
+		UnroutedTransportKind:        s.unroutedTransportKind.Load(),
 	}
 }
 
@@ -511,6 +543,22 @@ func (s *Streams) handlePacket(recvData *objproto.Message) {
 			return
 		}
 		rs.onCancel()
+	} else if dg := pkt.Datagram(); dg != nil {
+		// Ack-eliciting like stream data, and that is the reason the frame is
+		// transport-owned at all: without this the sender has no way to learn
+		// the datagram arrived, and nothing could separate a path drop from one
+		// this process made itself.
+		s.pt.InsertUnacked(uint64(recvData.PacketNumber))
+		// Copied because the decoded payload aliases the receive buffer, which
+		// the caller reuses for the next packet.
+		payload := make([]byte, len(dg.Data))
+		copy(payload, dg.Data)
+		select {
+		case s.datagramRecv <- payload:
+			s.datagramsReceived.Add(1)
+		default:
+			s.datagramsDroppedRcv.Add(1)
+		}
 	} else {
 		s.logger.Error("unknown stream packet type received", "type", pkt.Header.Kind)
 	}
@@ -965,6 +1013,34 @@ func (s *Streams) Send(msg *objproto.Message) {
 	s.recv.Push(msg)
 }
 
+// ReceiveDatagram returns the next datagram, blocking until one arrives or ctx
+// ends. Datagrams carry no stream id and are not ordered against stream data or
+// against each other; what a payload means is entirely the consumer's framing.
+func (s *Streams) ReceiveDatagram(ctx context.Context) ([]byte, error) {
+	select {
+	case b := <-s.datagramRecv:
+		return b, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// noteUnroutedTransportKind records a transport-owned kind that reached
+// AutoReceive's application seam.
+//
+// It is a bug detector for a duplication the schema language cannot remove: the
+// membership of isStreamRelated and the arms of StreamAppPacket are the same set
+// written twice in stream.bgn. Adding an arm without the predicate is the
+// direction that fails quietly -- the packet is handed to onEvent, the
+// application does not recognise the kind, and it disappears with nothing
+// logged anywhere. ping/pong/close are handled inside AutoReceive before this
+// point, so nothing legitimately arrives here.
+func (s *Streams) noteUnroutedTransportKind(kind wire.ApplicationPayloadKind) {
+	s.unroutedTransportKind.Add(1)
+	s.logger.Error("transport-owned payload kind reached the application seam: isStreamRelated and StreamAppPacket have drifted apart, and this packet is being dropped",
+		"kind", kind)
+}
+
 func (s *Streams) Recv(ctx context.Context) *SendAction {
 	for {
 		action := s.send.Pop()
@@ -1020,10 +1096,14 @@ func NewStreams(ctx context.Context, isServer bool, initialMTU int, maxMTU int, 
 		send:               newWithTriggerQueue[SendAction](),
 		newRecvStreamQueue: make(chan ReceiveStream, 100),
 		newBidiStreamQueue: make(chan BidirectionalStream, 100),
-		isServer:           isServer,
-		logger:             logger,
-		pnIssuer:           pnIssuer,
-		mtu:                mtu.NewMTUTracker(initialMTU, maxMTU, 30*time.Second),
+		// Bounded, and small on purpose: depth here is latency for a payload
+		// that has no retransmission to wait for anyway. Overflow drops and
+		// counts, the way a socket receive buffer does.
+		datagramRecv: make(chan []byte, 256),
+		isServer:     isServer,
+		logger:       logger,
+		pnIssuer:     pnIssuer,
+		mtu:          mtu.NewMTUTracker(initialMTU, maxMTU, 30*time.Second),
 	}
 	s.recvStreamGraceNs.Store(int64(time.Minute))
 	if isServer {
