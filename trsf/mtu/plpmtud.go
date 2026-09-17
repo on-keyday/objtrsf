@@ -2,6 +2,7 @@ package mtu
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -14,12 +15,21 @@ type MTUTracker struct {
 	low       int
 	high      int
 	lastProbe int
-	lossCount int // 連続ロス回数をカウントする変数を追加
+
+	// Two counters, not one. A search probe and a validation probe answer
+	// different questions -- "is this larger size reachable" versus "is the
+	// size already in use still reachable" -- so sharing a counter means two
+	// lost search probes followed by one lost validation trips the
+	// three-strike rule on evidence about two different sizes.
+	searchLossCount     int
+	validationLossCount int
 
 	lastProbeConverged    time.Time
 	reProbeAfterConverged time.Duration
 	reprobeBackoffCount   int
 	onMTUUpdate           func(int)
+
+	fallbacks atomic.Uint64
 }
 
 // maxReprobeBackoff caps the exponential re-probe backoff at 2^n times the
@@ -45,7 +55,6 @@ func NewMTUTracker(min, max int, reprobePeriod time.Duration) *MTUTracker {
 		max:                   max,
 		low:                   min + 1,
 		high:                  max,
-		lossCount:             0, // 初期化
 		reProbeAfterConverged: reprobePeriod,
 	}
 }
@@ -71,7 +80,7 @@ func (t *MTUTracker) Probe(now time.Time) int {
 		t.low = t.mtu + 1 // reset search range
 		t.high = t.max
 		t.lastProbeConverged = time.Time{}
-		t.lossCount = 0
+		t.searchLossCount = 0
 		if t.reprobeBackoffCount < maxReprobeBackoff {
 			t.reprobeBackoffCount++
 		}
@@ -97,7 +106,7 @@ func (t *MTUTracker) OnACK(now time.Time) {
 	t.m.Lock()
 	defer t.m.Unlock()
 	// 成功したので連続ロスカウンタをリセット
-	t.lossCount = 0
+	t.searchLossCount = 0
 
 	if t.lastProbe > t.mtu {
 		t.mtu = t.lastProbe
@@ -114,17 +123,62 @@ func (t *MTUTracker) OnACK(now time.Time) {
 func (t *MTUTracker) OnLost(now time.Time) {
 	t.m.Lock()
 	defer t.m.Unlock()
+	t.probeSent = false
+
+	// A probe at or below the current estimate is not search evidence. The
+	// search only ever probes ABOVE the estimate, so in the ordinary case this
+	// is never true; what it catches is a probe that was outstanding when
+	// fallBackToBase re-pointed lastProbe at the new estimate. Without it that
+	// late loss sets high = min-1 and inverts the range the fallback just
+	// reopened.
+	if t.lastProbe <= t.mtu {
+		return
+	}
+
 	// 失敗をカウント
-	t.lossCount++
+	t.searchLossCount++
 
 	// 3回連続で失敗した場合のみ、上限を引き下げる
-	if t.lossCount >= 3 {
+	if t.searchLossCount >= 3 {
 		t.high = t.lastProbe - 1
-		t.lossCount = 0 // 判定確定したのでカウンタをリセット
+		t.searchLossCount = 0 // 判定確定したのでカウンタをリセット
 		t.mayDetectConverged(now)
 	}
-	t.probeSent = false
 }
+
+// fallBackToBase is the ONLY place in this package where the estimate
+// decreases. Everything else raises it or narrows the search range, and that
+// asymmetry is what makes this file readable: a reader asking "where can the
+// MTU go down" gets one answer from one grep.
+//
+// Re-pointing lastProbe at the new estimate is load-bearing, not tidiness.
+// OnACK raises on `lastProbe > mtu` and reads lastProbe unconditionally, so a
+// probe still in flight when this runs would otherwise be acknowledged
+// afterwards and restore exactly the size this ruled out -- announcing it
+// through onMTUUpdate as an increase. OnLost's guard above reads the same
+// field for the mirror case, so neither needs an epoch counter.
+//
+// The caller must hold t.m.
+func (t *MTUTracker) fallBackToBase() {
+	t.mtu = t.min
+	t.low = t.min + 1
+	t.high = t.max
+	t.lastProbe = t.mtu
+	t.probeSent = false
+	t.searchLossCount = 0
+	t.validationLossCount = 0
+	t.lastProbeConverged = time.Time{}
+	t.fallbacks.Add(1)
+	if t.onMTUUpdate != nil {
+		t.onMTUUpdate(t.mtu)
+	}
+}
+
+// Fallbacks is how many times this tracker met a path that stopped carrying a
+// size it had already proven. A fleet-wide rise means the detector is firing on
+// congestion; zero everywhere means it is not firing at all, and those two are
+// the same picture without this number.
+func (t *MTUTracker) Fallbacks() uint64 { return t.fallbacks.Load() }
 
 func (t *MTUTracker) CurrentMTU() int {
 	t.m.RLock()
