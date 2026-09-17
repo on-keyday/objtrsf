@@ -198,6 +198,12 @@ func (t *MTUTracker) evaluateBlackHole(now time.Time) {
 // that schedule would take half an hour to notice a wedge.
 const validationInterval = 60 * time.Second
 
+// searchProbeInterval paces the search on a connection with no other reason to
+// wake. Short, because the search is a handful of steps and each one is a
+// packet; a connection carrying traffic reaches Probe far sooner than this and
+// never waits for it.
+const searchProbeInterval = 100 * time.Millisecond
+
 // probesDiscoverable reports whether this transport has a path MTU at all.
 //
 // A stream transport is constructed min == max (peer.MTUForTransport returns
@@ -270,13 +276,18 @@ func (t *MTUTracker) NextDeadline(now time.Time) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	if t.low <= t.high {
-		// Searching. No deadline: the probe is issued by the next pass through
-		// the send half, which the events that produce sends already reach, and
-		// returning "now" here would hand the run loop a deadline in the past
-		// on every iteration -- the invariant conn_spin_test.go exists to hold.
-		// The timer is for the CONVERGED connection, which is the case that has
-		// no other reason to wake.
-		return time.Time{}, false
+		// Searching. A deadline a short way into the FUTURE, never "now":
+		// returning the present hands the run loop a past timestamp on every
+		// iteration, which is the 0-delay spin conn_spin_test.go exists to
+		// catch. A future one wakes the loop, the pass issues a probe, and
+		// probeSent then silences this until the probe resolves -- so the cost
+		// is one timer per search step, and the search is bounded.
+		//
+		// This case is not optional. An idle connection never converges without
+		// it: nothing else wakes the loop, so Probe is never called, and the
+		// estimate sits at min forever. Measured before this existed -- 160 s
+		// of no traffic on a 1300-byte path left the estimate at 1200.
+		return now.Add(searchProbeInterval), true
 	}
 	next := t.lastValidation.Add(validationInterval)
 	if t.mtu < t.max {

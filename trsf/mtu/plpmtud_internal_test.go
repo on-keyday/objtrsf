@@ -420,3 +420,30 @@ func TestTrackerInvariantsHoldForAnyConfiguredBounds(t *testing.T) {
 		}
 	}
 }
+
+// An idle connection must still converge. NextDeadline is the only thing that
+// wakes the run loop when nothing else does, so a searching tracker that
+// reports no deadline never gets Probe called and sits at min forever --
+// measured as 160 s of no movement on a 1300-byte path before this case
+// existed.
+func TestASearchingTrackerAsksToBeWokenInTheFuture(t *testing.T) {
+	now := time.Now()
+	tr := newTestTracker()
+
+	d, ok := tr.NextDeadline(now)
+	if !ok {
+		t.Fatal("a searching tracker reports no deadline: an idle connection would never probe")
+	}
+	if !d.After(now) {
+		t.Errorf("deadline %v is not in the future -> the loop wakes, cannot act, and spins", d)
+	}
+	if d.After(now.Add(time.Second)) {
+		t.Errorf("deadline %v is more than a second out; the search would crawl", d)
+	}
+
+	// Once a probe is outstanding the loss timer owns it and this must go quiet.
+	tr.Probe(now)
+	if _, ok := tr.NextDeadline(now); ok {
+		t.Error("NextDeadline still reports a deadline while a probe is outstanding")
+	}
+}
