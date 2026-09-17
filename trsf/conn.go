@@ -322,6 +322,14 @@ type InternalState struct {
 	// kind reached the application seam, i.e. the schema's routing predicate and
 	// its union have drifted apart and packets are being dropped in silence.
 	UnroutedTransportKind uint64
+
+	// MTUFallbacks is how many times the estimate fell because a path stopped
+	// carrying a size it had already proven -- the one thing the upward search
+	// alone can never discover. MTUBaseUnusable is how many times the search
+	// collapsed with the base itself still being lost, which is the state RFC
+	// 9000 s14 says nothing below is attempted from.
+	MTUFallbacks    uint64
+	MTUBaseUnusable uint64
 }
 
 func (s *Streams) GetInternalState() *InternalState {
@@ -377,6 +385,9 @@ func (s *Streams) GetInternalState() *InternalState {
 		DatagramsDroppedCongestion:   s.datagramsDroppedCongest.Load(),
 		DatagramsDroppedSendQueue:    s.datagramsDroppedSendQueue.Load(),
 		UnroutedTransportKind:        s.unroutedTransportKind.Load(),
+
+		MTUFallbacks:    s.mtu.Fallbacks(),
+		MTUBaseUnusable: s.mtu.BaseUnusable(),
 	}
 }
 
@@ -507,6 +518,10 @@ func (s *Streams) removeSendStream(streamID StreamID) {
 }
 
 func (s *Streams) handlePacket(recvData *objproto.Message) {
+	// Liveness for the black-hole verdict. Any inbound packet, not just an ACK:
+	// in a hole none of our large packets are acknowledged, so an ACK-based
+	// signal would be absent on exactly the connection the verdict is for.
+	s.mtu.OnPeerActivity(time.Now())
 	pkt := wire.StreamAppPacket{}
 	err := pkt.DecodeExact(recvData.Data)
 	if err != nil {
@@ -652,6 +667,17 @@ func (s *Streams) noteWake(parkStart time.Time, r wakeReason) {
 // cannot tell them apart.
 func (s *Streams) nextWakeDeadline() (time.Time, bool) {
 	deadline := s.sh.LossDetectionTimeout()
+	// The MTU tracker's own timer. Without it the PLPMTUD machine does not run
+	// at all on an idle connection: Probe checks its interval inside itself,
+	// and an idle connection has the loss timer disarmed and the pacer skipped,
+	// so nothing would ever call it. NextDeadline stays silent while a probe is
+	// outstanding and on transports with no path MTU to discover, which is what
+	// keeps this from waking every idle WebSocket connection.
+	if mtuDeadline, ok := s.mtu.NextDeadline(time.Now()); ok {
+		if deadline.IsZero() || mtuDeadline.Before(deadline) {
+			deadline = mtuDeadline
+		}
+	}
 	// Pacing governs only data sends, so fold the pacing timer into the wake
 	// deadline ONLY when a send could actually happen on wake: congestion
 	// control permits it (CanSend) AND there is stream data queued (sendTrigger
@@ -958,13 +984,25 @@ func (s *Streams) run(ctx context.Context) {
 			sentRange := stream.triggerPacket(maxPayload)
 			if sentRange != nil {
 				pn := s.pnIssuer.ConsumePacketNumber()
+				// The MTU tracker learns about ordinary packets through the
+				// callbacks probes already use, so ack_handler gains no new
+				// concept. Size is the packet's, not the payload's: what the
+				// path either carries or drops is the whole datagram.
+				size := fixedOverhead + payloadOverhead + len(sentRange.Data)
+				rangeACK, rangeLost := sentRange.OnACK, sentRange.OnLost
 				s.sh.OnSent(&SentPacket{
-					Kind:            wire.ApplicationPayloadKind_StreamData,
-					OnACK:           sentRange.OnACK,
-					OnLost:          sentRange.OnLost,
+					Kind: wire.ApplicationPayloadKind_StreamData,
+					OnACK: func(now time.Time) {
+						s.mtu.OnLargePacketACKed(size, now)
+						rangeACK(now)
+					},
+					OnLost: func(now time.Time) {
+						s.mtu.OnLargePacketLost(size, now)
+						rangeLost(now)
+					},
 					PacketNumber:    pn,
 					StreamID:        stream.id,
-					PacketSize:      fixedOverhead + payloadOverhead + len(sentRange.Data),
+					PacketSize:      size,
 					SentTime:        time.Now(),
 					PathEvidence:    true,
 					Retransmittable: true,
@@ -1288,6 +1326,10 @@ func NewStreams(ctx context.Context, isServer bool, initialMTU int, maxMTU int, 
 	}
 	rtt := congestion.NewRTTStats(333 * time.Millisecond)
 	s.sh = NewSentPacketHandler(logger, rtt, congestion.NewNewReno(s.mtu, rtt, logger))
+	// The black-hole timeout is k round trips, so the tracker reads the RTT
+	// estimate live. A setter rather than a constructor argument keeps the
+	// eleven test call sites of NewMTUTracker untouched.
+	s.mtu.OnSRTT(func() time.Duration { return rtt.SRTT })
 	s.pt = NewPacketNumTracker()
 	go s.run(ctx)
 	return s

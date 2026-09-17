@@ -196,7 +196,7 @@ func TestLargeLostAndNoneAckedForTFallsBack(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		now = now.Add(50 * time.Millisecond)
 		tr.OnLargePacketLost(1280, now)
-		tr.OnSmallPacketACKed(now)
+		tr.OnPeerActivity(now)
 	}
 	if tr.Fallbacks() == 0 {
 		t.Fatal("no fallback after ten seconds of large loss with the connection alive")
@@ -215,7 +215,7 @@ func TestALargeACKInsideTPreventsTheVerdict(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		now = now.Add(50 * time.Millisecond)
 		tr.OnLargePacketLost(1280, now)
-		tr.OnSmallPacketACKed(now)
+		tr.OnPeerActivity(now)
 		// One large packet gets through every 500 ms: loss, but not a hole.
 		if i%10 == 0 {
 			tr.OnLargePacketACKed(1280, now)
@@ -227,10 +227,10 @@ func TestALargeACKInsideTPreventsTheVerdict(t *testing.T) {
 	}
 }
 
-// A connection with no ACKs at all is dead, not black-holed. Falling back there
+// A connection hearing nothing from its peer is dead, not black-holed. Falling back there
 // is harmless but the verdict would stop meaning what it is named, and the
 // counter would stop being readable as a false-positive rate.
-func TestNoACKsAtAllDoesNotFallBack(t *testing.T) {
+func TestNoPeerActivityAtAllDoesNotFallBack(t *testing.T) {
 	now := time.Now()
 	tr := newVerdictTracker(20 * time.Millisecond)
 	converge(t, tr, 1300, now)
@@ -256,7 +256,7 @@ func TestPacketsAtOrBelowBaseAreNotEvidence(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		now = now.Add(50 * time.Millisecond)
 		tr.OnLargePacketLost(1100, now)
-		tr.OnSmallPacketACKed(now)
+		tr.OnPeerActivity(now)
 	}
 	if tr.Fallbacks() != 0 {
 		t.Fatalf("Fallbacks = %d: a loss at or below the base is not evidence about size", tr.Fallbacks())

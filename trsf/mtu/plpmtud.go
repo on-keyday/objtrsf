@@ -142,10 +142,16 @@ func (t *MTUTracker) OnLargePacketACKed(size int, now time.Time) {
 	t.largeLostSeen = false
 }
 
-// OnSmallPacketACKed records liveness with no size evidence, for a connection
-// carrying nothing but acknowledgements. Without it the liveness clause could
-// not be satisfied on exactly the connection a black hole produces.
-func (t *MTUTracker) OnSmallPacketACKed(now time.Time) {
+// OnPeerActivity records that something arrived from the peer, which is the
+// liveness half of the verdict.
+//
+// "An ACK reached us" would be the obvious signal and is the WRONG one: in a
+// black hole every large packet is lost, so on a bulk transfer nothing of ours
+// is acknowledged at all and the liveness clause could never be satisfied on
+// exactly the connection this is meant to recognise. What stays true is that
+// the peer keeps sending -- its own ACKs of whatever crossed, its own data --
+// so the signal is any received packet.
+func (t *MTUTracker) OnPeerActivity(now time.Time) {
 	t.m.Lock()
 	defer t.m.Unlock()
 	t.lastAnyACK = now
@@ -264,7 +270,13 @@ func (t *MTUTracker) NextDeadline(now time.Time) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	if t.low <= t.high {
-		return now, true // searching: there is a probe to issue right now
+		// Searching. No deadline: the probe is issued by the next pass through
+		// the send half, which the events that produce sends already reach, and
+		// returning "now" here would hand the run loop a deadline in the past
+		// on every iteration -- the invariant conn_spin_test.go exists to hold.
+		// The timer is for the CONVERGED connection, which is the case that has
+		// no other reason to wake.
+		return time.Time{}, false
 	}
 	next := t.lastValidation.Add(validationInterval)
 	if t.mtu < t.max {

@@ -57,7 +57,8 @@ func spinTestSetup(t *testing.T, inFlight int) *SentPacketHandler {
 // wait on the future loss timer instead.
 func TestNextWakeDeadlineNoSpinNothingToSend(t *testing.T) {
 	sh := spinTestSetup(t, 50) // tiny in-flight -> CanSend() true
-	s := &Streams{sh: sh, sendTrigger: newWithTriggerQueue[sendStream]()}
+	s := &Streams{sh: sh, sendTrigger: newWithTriggerQueue[sendStream](),
+		mtu: mtu.NewMTUTracker(1200, 1500, 30*time.Second)}
 	if !sh.CanSend() {
 		t.Fatalf("setup: expected CanSend true for tiny in-flight")
 	}
@@ -75,7 +76,8 @@ func TestNextWakeDeadlineNoSpinNothingToSend(t *testing.T) {
 // Again the drained past pacing timer must not drive the deadline into the past.
 func TestNextWakeDeadlineNoSpinCongestionBlocked(t *testing.T) {
 	sh := spinTestSetup(t, 8000) // >> cwnd(2400) -> CanSend() false
-	s := &Streams{sh: sh, sendTrigger: newWithTriggerQueue[sendStream]()}
+	s := &Streams{sh: sh, sendTrigger: newWithTriggerQueue[sendStream](),
+		mtu: mtu.NewMTUTracker(1200, 1500, 30*time.Second)}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mtuTracker := mtu.NewMTUTracker(1200, 1500, 30*time.Second)
 	st := newSendStream(context.Background(), mtuTracker, 1,
@@ -106,7 +108,8 @@ func TestNextWakeDeadlineNoSpinCongestionBlocked(t *testing.T) {
 // immediately leads to one rather than to another blocked spin.
 func TestNextWakeDeadlineNamesThePacerWhenItIsTheSource(t *testing.T) {
 	sh := spinTestSetup(t, 50) // tiny in-flight -> CanSend() true
-	s := &Streams{sh: sh, sendTrigger: newWithTriggerQueue[sendStream]()}
+	s := &Streams{sh: sh, sendTrigger: newWithTriggerQueue[sendStream](),
+		mtu: mtu.NewMTUTracker(1200, 1500, 30*time.Second)}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mtuTracker := mtu.NewMTUTracker(1200, 1500, 30*time.Second)
 	st := newSendStream(context.Background(), mtuTracker, 1,
