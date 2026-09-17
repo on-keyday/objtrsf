@@ -262,21 +262,102 @@ func StreamPacketHeaderSize(id StreamID, offset uint64, dataLen int) int {
 	return size
 }
 
+// splitSentRange divides a queued retransmission that no longer fits the
+// current budget. The caller holds r.m.
+//
+// Eof rides the TAIL. On the head it ends the stream at the head's last offset
+// and everything after it is never delivered.
+//
+// Both fragments replace the original in sentRanges, which is matched by
+// POINTER IDENTITY: leaving the original behind retires bytes that were never
+// acknowledged, and adding the fragments without removing it degrades onACK's
+// O(1) head path into the O(n) filter beneath it.
+//
+// Neither fragment touches the flow controller. The original send already
+// consumed the window; a retransmission is the same bytes again.
+func (r *sendStream) splitSentRange(src *SentRange, maxPayload int) (head, tail *SentRange) {
+	// Derived from the header width for the FULL length, so the head's own
+	// header -- whose length field is a varint and may be narrower -- can only
+	// be smaller. The comment in triggerPacket records what a fixed reservation
+	// cost the last time a chunk crossed a varint boundary.
+	n := maxPayload - StreamPacketHeaderSize(src.ID, src.Offset, len(src.Data))
+	if n > len(src.Data) {
+		n = len(src.Data)
+	}
+	head = &SentRange{ID: src.ID, Offset: src.Offset, Data: src.Data[:n], SentSize: n}
+	tail = &SentRange{
+		ID:       src.ID,
+		Offset:   src.Offset + uint64(n),
+		Data:     src.Data[n:],
+		SentSize: len(src.Data) - n,
+		Eof:      src.Eof,
+	}
+	for _, f := range []*SentRange{head, tail} {
+		fr := f
+		fr.OnACK = func(now time.Time) { r.onACK(fr, now) }
+		fr.OnLost = func(now time.Time) {
+			r.retransmitQueue.Push(fr)
+			r.sendTrigger.PushBecause(r, pushLoss)
+		}
+	}
+	r.replaceSentRange(src, head, tail)
+	return head, tail
+}
+
+// replaceSentRange swaps one tracked range for the fragments it became. The
+// caller holds r.m.
+func (r *sendStream) replaceSentRange(src *SentRange, with ...*SentRange) {
+	for i, sr := range r.sentRanges {
+		if sr != src {
+			continue
+		}
+		replaced := make([]*SentRange, 0, len(r.sentRanges)+len(with)-1)
+		replaced = append(replaced, r.sentRanges[:i]...)
+		replaced = append(replaced, with...)
+		replaced = append(replaced, r.sentRanges[i+1:]...)
+		r.sentRanges = replaced
+		return
+	}
+	// Not tracked: an ACK overtook the loss and already retired it. The
+	// fragments still go out and the peer discards the duplicate offsets, which
+	// is what an untracked retransmission already meant here.
+	r.sentRanges = append(r.sentRanges, with...)
+}
+
 func (r *sendStream) triggerPacket(maxPayload int) *SentRange {
 	r.m.Lock()
 	defer r.m.Unlock()
 	if popped := r.retransmitQueue.Pop(); popped != nil {
 		headerSize := StreamPacketHeaderSize(popped.ID, popped.Offset, len(popped.Data))
-		if maxPayload <= headerSize {
-			// cannot send now, push back
-			r.retransmitQueue.Push(popped)
-		} else {
+		switch {
+		case headerSize+len(popped.Data) <= maxPayload:
 			r.logger.Debug("retransmitting stream data", "id", popped.ID, "offset", popped.Offset, "size", len(popped.Data))
 			// This return skips the tail of the function, so the re-queue has
 			// to happen here too — see requeueIfMore for what it cost when it
 			// did not.
 			r.requeueIfMore()
 			return popped
+
+		case len(popped.Data) == 0 || maxPayload <= headerSize+1:
+			// Nothing to divide. An Eof-only range has no bytes, and a budget
+			// with no room for a single one would produce a head that advances
+			// nothing and a tail identical to the input -- a spin rather than
+			// progress. Push back and wait for a budget that fits.
+			r.retransmitQueue.Push(popped)
+
+		default:
+			// The chunk was captured when the budget was larger. This condition
+			// was unreachable while the MTU estimate could only rise, which is
+			// why the guard above asked only whether the HEADER fit; now that
+			// the estimate can fall, returning the chunk whole would mean a
+			// lowered MTU changed nothing for data already in flight.
+			head, tail := r.splitSentRange(popped, maxPayload)
+			r.retransmitQueue.Push(tail)
+			r.logger.Debug("re-split a retransmission to the current budget",
+				"id", popped.ID, "offset", popped.Offset,
+				"was", len(popped.Data), "now", len(head.Data), "budget", maxPayload)
+			r.requeueIfMore()
+			return head
 		}
 	}
 	if r.eofSent {
