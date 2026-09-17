@@ -149,3 +149,141 @@ func TestTwoFallbacksInARowLeaveAConsistentState(t *testing.T) {
 		t.Errorf("Fallbacks = %d, want 2", tr.Fallbacks())
 	}
 }
+
+// --- the data-loss detector -------------------------------------------
+
+// 20 ms with k=10 puts k*srtt at 200 ms, below the floor, so these tests run
+// against the 1 s floor. That is deliberate: the floor is the value most
+// connections on a LAN will actually use.
+func newVerdictTracker(srtt time.Duration) *MTUTracker {
+	tr := NewMTUTracker(1200, 1452, 30*time.Second)
+	tr.OnSRTT(func() time.Duration { return srtt })
+	return tr
+}
+
+// The guard that matters most. A path that is simply carrying traffic, with
+// ordinary bursty loss, must never fall back.
+func TestHealthyPathNeverFallsBack(t *testing.T) {
+	now := time.Now()
+	tr := newVerdictTracker(20 * time.Millisecond)
+	converge(t, tr, 1300, now)
+
+	for i := 0; i < 2000; i++ {
+		now = now.Add(10 * time.Millisecond)
+		// Every twentieth round loses a burst of large packets, as a
+		// congestion event does, and the rest get through.
+		if i%20 == 0 {
+			for j := 0; j < 5; j++ {
+				tr.OnLargePacketLost(1280, now)
+			}
+		}
+		tr.OnLargePacketACKed(1280, now)
+	}
+	if tr.Fallbacks() != 0 {
+		t.Fatalf("Fallbacks = %d on a healthy path: the detector fires on ordinary congestion",
+			tr.Fallbacks())
+	}
+}
+
+func TestLargeLostAndNoneAckedForTFallsBack(t *testing.T) {
+	now := time.Now()
+	tr := newVerdictTracker(20 * time.Millisecond)
+	converge(t, tr, 1300, now)
+	tr.OnLargePacketACKed(1280, now)
+
+	// Large packets keep being lost; small ones keep being acknowledged, which
+	// is what the liveness clause reads and what a shrunk path looks like.
+	for i := 0; i < 200; i++ {
+		now = now.Add(50 * time.Millisecond)
+		tr.OnLargePacketLost(1280, now)
+		tr.OnSmallPacketACKed(now)
+	}
+	if tr.Fallbacks() == 0 {
+		t.Fatal("no fallback after ten seconds of large loss with the connection alive")
+	}
+	if tr.CurrentMTU() != 1200 {
+		t.Errorf("CurrentMTU = %d, want the base 1200", tr.CurrentMTU())
+	}
+}
+
+func TestALargeACKInsideTPreventsTheVerdict(t *testing.T) {
+	now := time.Now()
+	tr := newVerdictTracker(20 * time.Millisecond)
+	converge(t, tr, 1300, now)
+	tr.OnLargePacketACKed(1280, now)
+
+	for i := 0; i < 200; i++ {
+		now = now.Add(50 * time.Millisecond)
+		tr.OnLargePacketLost(1280, now)
+		tr.OnSmallPacketACKed(now)
+		// One large packet gets through every 500 ms: loss, but not a hole.
+		if i%10 == 0 {
+			tr.OnLargePacketACKed(1280, now)
+		}
+	}
+	if tr.Fallbacks() != 0 {
+		t.Fatalf("Fallbacks = %d: a large packet is getting through, so this is loss and not a black hole",
+			tr.Fallbacks())
+	}
+}
+
+// A connection with no ACKs at all is dead, not black-holed. Falling back there
+// is harmless but the verdict would stop meaning what it is named, and the
+// counter would stop being readable as a false-positive rate.
+func TestNoACKsAtAllDoesNotFallBack(t *testing.T) {
+	now := time.Now()
+	tr := newVerdictTracker(20 * time.Millisecond)
+	converge(t, tr, 1300, now)
+
+	for i := 0; i < 200; i++ {
+		now = now.Add(50 * time.Millisecond)
+		tr.OnLargePacketLost(1280, now)
+	}
+	if tr.Fallbacks() != 0 {
+		t.Fatalf("Fallbacks = %d on a connection receiving nothing: that is a dead path, not a hole",
+			tr.Fallbacks())
+	}
+}
+
+// A loss at or below the base says nothing about size: those cross a shrunk
+// path too, which is the whole reason the base is the fallback target.
+func TestPacketsAtOrBelowBaseAreNotEvidence(t *testing.T) {
+	now := time.Now()
+	tr := newVerdictTracker(20 * time.Millisecond)
+	converge(t, tr, 1300, now)
+	tr.OnLargePacketACKed(1280, now)
+
+	for i := 0; i < 200; i++ {
+		now = now.Add(50 * time.Millisecond)
+		tr.OnLargePacketLost(1100, now)
+		tr.OnSmallPacketACKed(now)
+	}
+	if tr.Fallbacks() != 0 {
+		t.Fatalf("Fallbacks = %d: a loss at or below the base is not evidence about size", tr.Fallbacks())
+	}
+}
+
+func TestBlackHoleTimeoutScalesWithSRTTBetweenFloorAndCap(t *testing.T) {
+	for _, tc := range []struct {
+		srtt time.Duration
+		want time.Duration
+	}{
+		{50 * time.Microsecond, time.Second},      // loopback: the floor
+		{500 * time.Millisecond, 5 * time.Second}, // k * srtt
+		{10 * time.Second, 30 * time.Second},      // the cap
+	} {
+		tr := newVerdictTracker(tc.srtt)
+		if got := tr.blackHoleTimeout(); got != tc.want {
+			t.Errorf("blackHoleTimeout at srtt=%v = %v, want %v", tc.srtt, got, tc.want)
+		}
+	}
+}
+
+// A tracker with no srtt supplied must still work: the trsf tests that build
+// one directly do not set it.
+func TestBlackHoleTimeoutWithoutAnSRTTSourceIsTheFloor(t *testing.T) {
+	tr := NewMTUTracker(1200, 1452, 30*time.Second)
+	if got := tr.blackHoleTimeout(); got != time.Second {
+		t.Errorf("blackHoleTimeout with no srtt = %v, want the floor", got)
+	}
+}

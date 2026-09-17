@@ -29,6 +29,14 @@ type MTUTracker struct {
 	reprobeBackoffCount   int
 	onMTUUpdate           func(int)
 
+	// The black-hole detector's state. srtt is a function rather than a
+	// *congestion.RTTStats so this package does not import congestion; the
+	// estimate is read live because the timeout is derived from it.
+	srtt          func() time.Duration
+	lastLargeACK  time.Time
+	lastAnyACK    time.Time
+	largeLostSeen bool
+
 	fallbacks atomic.Uint64
 }
 
@@ -61,6 +69,112 @@ func NewMTUTracker(min, max int, reprobePeriod time.Duration) *MTUTracker {
 
 func (t *MTUTracker) OnMTUUpdate(fn func(int)) {
 	t.onMTUUpdate = fn
+}
+
+// OnSRTT supplies the smoothed round-trip time the black-hole timeout is
+// derived from. A setter rather than a constructor parameter, mirroring
+// OnMTUUpdate directly above: the owner sets it once immediately after
+// construction, and every caller that does not care -- the tests that build a
+// tracker to drive the search -- is unaffected. blackHoleTimeout handles the
+// unset case.
+func (t *MTUTracker) OnSRTT(fn func() time.Duration) {
+	t.srtt = fn
+}
+
+// The black-hole timeout is k round trips, bounded.
+//
+// What it has to outlast is a congestion episode, and an episode is measured in
+// round trips -- a constant is far too long on a LAN and far too short on a
+// satellite path. srtt is well defined at exactly the moment the verdict is
+// evaluated, and that is not incidental: the verdict already requires that ACKs
+// are arriving, so the estimate is live off the small packets still getting
+// through.
+//
+// PTO would fold in RTT variance for free and is still the wrong unit. It backs
+// off exponentially under sustained loss, which is the state this is trying to
+// recognise, so N*PTO stretches away from detection exactly when it is needed.
+//
+// The floor exists because k*srtt on loopback is microseconds. The cap bounds
+// worst-case detection latency on a very slow path. All three are meant to be
+// replaced by the lossy and bufferbloat measurements, not defended by argument.
+const (
+	blackHoleRTTs  = 10
+	blackHoleFloor = 1 * time.Second
+	blackHoleCap   = 30 * time.Second
+)
+
+// blackHoleTimeout reads only srtt and constants, so it needs no lock of its
+// own and may be called with t.m held.
+func (t *MTUTracker) blackHoleTimeout() time.Duration {
+	var srtt time.Duration
+	if t.srtt != nil {
+		srtt = t.srtt()
+	}
+	switch d := time.Duration(blackHoleRTTs) * srtt; {
+	case d < blackHoleFloor:
+		return blackHoleFloor
+	case d > blackHoleCap:
+		return blackHoleCap
+	default:
+		return d
+	}
+}
+
+// OnLargePacketACKed records that a packet larger than the base crossed the
+// path. A size at or below min is not evidence about SIZE -- those cross a
+// shrunk path too, which is the reason min is the fallback target -- but it is
+// still evidence the connection is alive.
+func (t *MTUTracker) OnLargePacketACKed(size int, now time.Time) {
+	t.m.Lock()
+	defer t.m.Unlock()
+	t.lastAnyACK = now
+	if size <= t.min {
+		return
+	}
+	t.lastLargeACK = now
+	t.largeLostSeen = false
+}
+
+// OnSmallPacketACKed records liveness with no size evidence, for a connection
+// carrying nothing but acknowledgements. Without it the liveness clause could
+// not be satisfied on exactly the connection a black hole produces.
+func (t *MTUTracker) OnSmallPacketACKed(now time.Time) {
+	t.m.Lock()
+	defer t.m.Unlock()
+	t.lastAnyACK = now
+}
+
+// OnLargePacketLost is the half of the detector that works while a transfer is
+// running, and it is deliberately NOT a consecutive-loss count: congestion
+// drops whole bursts, so three in a row is an ordinary Tuesday. What
+// distinguishes a black hole is that nothing large gets through at all while
+// the connection is otherwise alive.
+func (t *MTUTracker) OnLargePacketLost(size int, now time.Time) {
+	t.m.Lock()
+	defer t.m.Unlock()
+	if size <= t.min {
+		return
+	}
+	t.largeLostSeen = true
+	t.evaluateBlackHole(now)
+}
+
+// evaluateBlackHole requires t.m.
+func (t *MTUTracker) evaluateBlackHole(now time.Time) {
+	if t.mtu <= t.min {
+		return // already at the base; there is nowhere to fall
+	}
+	if !t.largeLostSeen {
+		return // nothing large has been lost, so nothing says the size is wrong
+	}
+	timeout := t.blackHoleTimeout()
+	if t.lastLargeACK.IsZero() || now.Sub(t.lastLargeACK) <= timeout {
+		return // something large is still getting through
+	}
+	if t.lastAnyACK.IsZero() || now.Sub(t.lastAnyACK) > timeout {
+		return // nothing at all is arriving: a dead path, not a hole
+	}
+	t.fallBackToBase()
 }
 
 func (t *MTUTracker) Probe(now time.Time) int {
@@ -168,6 +282,10 @@ func (t *MTUTracker) fallBackToBase() {
 	t.searchLossCount = 0
 	t.validationLossCount = 0
 	t.lastProbeConverged = time.Time{}
+	// Without clearing these the very next large loss re-fires the verdict,
+	// because lastLargeACK is still the stale timestamp that produced this one.
+	t.largeLostSeen = false
+	t.lastLargeACK = time.Time{}
 	t.fallbacks.Add(1)
 	if t.onMTUUpdate != nil {
 		t.onMTUUpdate(t.mtu)
