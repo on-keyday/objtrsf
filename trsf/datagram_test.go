@@ -319,3 +319,22 @@ func TestAnUnregisteredConsumerKindIsNotADatagram(t *testing.T) {
 		t.Error("a transport kind was offered to the consumer predicate and claimed")
 	}
 }
+
+// A kind the consumer never registered is refused at the SENDER. Sending it
+// would fail at the far end and in silence: the peer runs the same
+// registration, so its core would route the packet to the application seam
+// where nothing is waiting. This is the guard that keeps "you forgot to add the
+// kind" a local error instead of a packet that vanishes between two processes.
+func TestDatagramWithAnUnregisteredKindIsRefused(t *testing.T) {
+	s := newLiveStreams(t)
+	if err := s.SendDatagram([]byte{testDatagramKind + 1, 'x'}); err != ErrDatagramKindUnregistered {
+		t.Errorf("SendDatagram with an unregistered kind returned %v, want ErrDatagramKindUnregistered", err)
+	}
+	if err := s.SendDatagramUncontrolled([]byte{testDatagramKind + 1, 'x'}); err != ErrDatagramKindUnregistered {
+		t.Errorf("SendDatagramUncontrolled with an unregistered kind returned %v, want ErrDatagramKindUnregistered", err)
+	}
+	// The registered one still goes.
+	if err := s.SendDatagram(dgram("ok")); err != nil {
+		t.Errorf("SendDatagram with the registered kind returned %v", err)
+	}
+}

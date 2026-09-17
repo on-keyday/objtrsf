@@ -1164,15 +1164,35 @@ func (s *Streams) SendDatagram(b []byte) error { return s.sendDatagram(b, false)
 // sharing this very connection, because those are the only ones that yield.
 func (s *Streams) SendDatagramUncontrolled(b []byte) error { return s.sendDatagram(b, true) }
 
-// ErrDatagramKindReserved: the payload's leading byte is in the transport's own
-// kind range. It cannot be sent, because the peer's core would decode it as one
-// of its own kinds -- the range IS the ownership boundary, and it is the only
-// thing keeping one kind byte enough for both layers.
-var ErrDatagramKindReserved = errors.New("trsf: datagram kind is in the transport-reserved range")
+var (
+	// ErrDatagramKindReserved: the payload's leading byte is in the transport's
+	// own kind range. It cannot be sent, because the peer's core would decode
+	// it as one of its own kinds -- the range IS the ownership boundary, and it
+	// is the only thing keeping one kind byte enough for both layers.
+	//
+	// The fix is at the caller: pick a byte at or above USER_DEFINED_START.
+	ErrDatagramKindReserved = errors.New("trsf: datagram kind is in the transport-reserved range")
+
+	// ErrDatagramKindUnregistered: the kind is the consumer's to use, but
+	// SetDatagramKinds does not claim it.
+	//
+	// Refused rather than sent, because sending would fail at the FAR end and
+	// in silence: the peer runs the same registration, so a kind missing here
+	// is missing there too, and its core would hand the packet to the
+	// application seam where nothing is waiting for it. A local error naming
+	// the kind is the difference between a one-line fix and a packet that
+	// vanishes between two processes.
+	//
+	// The fix is at the caller: add the kind to SetDatagramKinds.
+	ErrDatagramKindUnregistered = errors.New("trsf: datagram kind is not registered with SetDatagramKinds")
+)
 
 func (s *Streams) sendDatagram(b []byte, exempt bool) error {
 	if len(b) == 0 || b[0] < wire.USER_DEFINED_START {
 		return ErrDatagramKindReserved
+	}
+	if !s.IsDatagramKind(b[0]) {
+		return ErrDatagramKindUnregistered
 	}
 	if len(b) > s.MaxDatagramSize() {
 		s.datagramsDroppedOversize.Add(1)
