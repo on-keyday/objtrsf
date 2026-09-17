@@ -287,3 +287,136 @@ func TestBlackHoleTimeoutWithoutAnSRTTSourceIsTheFloor(t *testing.T) {
 		t.Errorf("blackHoleTimeout with no srtt = %v, want the floor", got)
 	}
 }
+
+// --- validation probes, the wake deadline, and the base floor ----------
+
+func TestValidationProbeIsIssuedAtTheCurrentEstimateWhenConverged(t *testing.T) {
+	now := time.Now()
+	tr := newVerdictTracker(20 * time.Millisecond)
+	settled := converge(t, tr, 1300, now)
+
+	if size := tr.Probe(now); size != -1 {
+		t.Fatalf("Probe = %d immediately after convergence, want -1", size)
+	}
+	now = now.Add(61 * time.Second)
+	if size := tr.Probe(now); size != settled {
+		t.Errorf("Probe = %d, want a validation probe at the current estimate %d", size, settled)
+	}
+}
+
+func TestThreeLostValidationProbesFallBack(t *testing.T) {
+	now := time.Now()
+	tr := newVerdictTracker(20 * time.Millisecond)
+	converge(t, tr, 1300, now)
+
+	for i := 0; i < 3; i++ {
+		now = now.Add(61 * time.Second)
+		if tr.Probe(now) == -1 {
+			t.Fatalf("no validation probe issued on round %d", i)
+		}
+		tr.OnLost(now)
+	}
+	if tr.Fallbacks() != 1 {
+		t.Fatalf("Fallbacks = %d after three lost validation probes, want 1", tr.Fallbacks())
+	}
+	if tr.CurrentMTU() != 1200 {
+		t.Errorf("CurrentMTU = %d, want the base 1200", tr.CurrentMTU())
+	}
+}
+
+// A deadline while a probe is outstanding is a past timestamp the run loop
+// wakes on, cannot act on, and immediately sees again -- the 0-delay spin
+// conn.go's nextWakeDeadline documents. The loss detection timer already covers
+// an outstanding probe.
+func TestNextDeadlineIsSilentWhileAProbeIsOutstanding(t *testing.T) {
+	now := time.Now()
+	tr := newVerdictTracker(20 * time.Millisecond)
+	converge(t, tr, 1300, now)
+	now = now.Add(61 * time.Second)
+	if tr.Probe(now) == -1 {
+		t.Fatalf("expected a validation probe")
+	}
+	if d, ok := tr.NextDeadline(now); ok {
+		t.Errorf("NextDeadline reported %v while a probe is outstanding", d)
+	}
+}
+
+// A stream transport is constructed min == max. Waking every idle WebSocket
+// connection in a fleet would be a regression, and the gate that prevents it is
+// on the values, not on a transport name.
+func TestNextDeadlineIsSilentWhenMinEqualsMax(t *testing.T) {
+	tr := NewMTUTracker(16384, 16384, 30*time.Second)
+	if d, ok := tr.NextDeadline(time.Now()); ok {
+		t.Errorf("a min==max transport asked for a wake at %v", d)
+	}
+	if size := tr.Probe(time.Now()); size != -1 {
+		t.Errorf("Probe = %d for a min==max transport, want -1", size)
+	}
+}
+
+// A connection converged at the ceiling must still validate, or the ceiling is
+// the one place a shrink can never be noticed.
+func TestConvergedAtMaxStillValidatesButDoesNotSearchUp(t *testing.T) {
+	now := time.Now()
+	tr := newVerdictTracker(20 * time.Millisecond)
+	converge(t, tr, 9000, now) // a path wider than max
+	if tr.CurrentMTU() != 1452 {
+		t.Fatalf("CurrentMTU = %d, want the ceiling 1452", tr.CurrentMTU())
+	}
+	now = now.Add(61 * time.Second)
+	if size := tr.Probe(now); size != 1452 {
+		t.Errorf("Probe = %d at the ceiling, want a validation probe at 1452", size)
+	}
+}
+
+// The search collapsing with the base itself still being lost is the one state
+// nothing below is attempted from: RFC 9000 s14 -- "QUIC MUST NOT be used if
+// the network path cannot support a maximum datagram size of at least 1200
+// bytes." Counted, not repaired.
+func TestBaseUnusableIsCountedWhenTheSearchCollapsesAtMin(t *testing.T) {
+	now := time.Now()
+	tr := newVerdictTracker(20 * time.Millisecond)
+	for i := 0; i < 256 && tr.BaseUnusable() == 0; i++ {
+		now = now.Add(61 * time.Second)
+		if tr.Probe(now) == -1 {
+			continue
+		}
+		tr.OnLost(now)
+	}
+	if tr.BaseUnusable() == 0 {
+		t.Fatal("BaseUnusable never rose on a path that carries nothing")
+	}
+	if tr.CurrentMTU() != 1200 {
+		t.Errorf("CurrentMTU = %d, want the base 1200: nothing below it is attempted", tr.CurrentMTU())
+	}
+}
+
+// The algorithm's correctness must not depend on the caller's defaults. 1200 is
+// what peer.MTUForTransport happens to pass, not a constant of this package.
+func TestTrackerInvariantsHoldForAnyConfiguredBounds(t *testing.T) {
+	for _, tc := range []struct{ min, max int }{
+		{1200, 1452},   // production udp
+		{16384, 16384}, // a stream transport: nothing to discover
+		{1200, 1201},   // a degenerate one-step search
+		{576, 1452},    // below the QUIC base
+		{68, 1452},     // the IPv4 minimum
+	} {
+		now := time.Now()
+		tr := NewMTUTracker(tc.min, tc.max, 30*time.Second)
+		got := converge(t, tr, 1300, now)
+		if got < tc.min || got > tc.max {
+			t.Errorf("(%d,%d): converged at %d, outside the bounds", tc.min, tc.max, got)
+		}
+		tr.fallBackForTest()
+		if tr.CurrentMTU() != tc.min {
+			t.Errorf("(%d,%d): fallback landed on %d, want min", tc.min, tc.max, tr.CurrentMTU())
+		}
+		if tr.MinCandidate() > tr.MaxCandidate() && tc.min != tc.max {
+			t.Errorf("(%d,%d): range inverted after fallback: low=%d high=%d",
+				tc.min, tc.max, tr.MinCandidate(), tr.MaxCandidate())
+		}
+		if d, ok := tr.NextDeadline(now); ok && d.Before(now) {
+			t.Errorf("(%d,%d): NextDeadline is in the past (%v)", tc.min, tc.max, d)
+		}
+	}
+}

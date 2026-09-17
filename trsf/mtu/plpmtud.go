@@ -37,7 +37,14 @@ type MTUTracker struct {
 	lastAnyACK    time.Time
 	largeLostSeen bool
 
-	fallbacks atomic.Uint64
+	// validating says which question the outstanding probe is asking, because
+	// OnACK and OnLost mean different things for each: a search probe moves
+	// the range, a validation probe tests the estimate itself.
+	validating     bool
+	lastValidation time.Time
+
+	fallbacks    atomic.Uint64
+	baseUnusable atomic.Uint64
 }
 
 // maxReprobeBackoff caps the exponential re-probe backoff at 2^n times the
@@ -177,29 +184,63 @@ func (t *MTUTracker) evaluateBlackHole(now time.Time) {
 	t.fallBackToBase()
 }
 
+// validationInterval is how often a converged tracker re-proves the size it is
+// already using.
+//
+// Separate from reProbeAfterConverged on purpose: that one backs off to ~32 min
+// so a path which is not changing is not re-searched forever, and a detector on
+// that schedule would take half an hour to notice a wedge.
+const validationInterval = 60 * time.Second
+
+// probesDiscoverable reports whether this transport has a path MTU at all.
+//
+// A stream transport is constructed min == max (peer.MTUForTransport returns
+// StreamMTU for both on ws/wss): its size is a framing choice, so there is
+// nothing to discover and nothing that can shrink. Gating on the VALUES rather
+// than on a transport name is deliberate -- the values are what make the
+// question meaningless, and a name-based predicate would be a second place to
+// keep in step with the caller.
+func (t *MTUTracker) probesDiscoverable() bool { return t.min < t.max }
+
 func (t *MTUTracker) Probe(now time.Time) int {
 	t.m.Lock()
 	defer t.m.Unlock()
-	if t.probeSent {
+	if t.probeSent || !t.probesDiscoverable() {
 		return -1
 	}
-	// すでに探索範囲がなくなっている場合、再探索まで待つ
+	// すでに探索範囲がなくなっている場合、再探索か検証まで待つ
 	if t.low > t.high {
-		if !now.After(t.lastProbeConverged.Add(t.reProbeAfterConverged * time.Duration(1<<t.reprobeBackoffCount))) {
+		switch {
+		case now.After(t.lastValidation.Add(validationInterval)):
+			// Re-prove the size already in use. This is the ONLY detector that
+			// works on a connection with no traffic, and it takes precedence
+			// over reopening the search upward: the upward search is an
+			// optimisation, and a probe ABOVE the estimate says nothing about
+			// whether the estimate itself still crosses.
+			//
+			// It must also survive mtu >= max, or the ceiling is the one place
+			// a shrink can never be noticed.
+			t.probeSent = true
+			t.validating = true
+			t.lastValidation = now
+			t.lastProbe = t.mtu
+			return t.lastProbe
+
+		case now.After(t.lastProbeConverged.Add(t.reProbeAfterConverged*time.Duration(1<<t.reprobeBackoffCount))) && t.mtu < t.max:
+			t.low = t.mtu + 1 // reset search range
+			t.high = t.max
+			t.lastProbeConverged = time.Time{}
+			t.searchLossCount = 0
+			if t.reprobeBackoffCount < maxReprobeBackoff {
+				t.reprobeBackoffCount++
+			}
+
+		default:
 			return -1
-		}
-		if t.mtu >= t.max { // best case
-			return -1
-		}
-		t.low = t.mtu + 1 // reset search range
-		t.high = t.max
-		t.lastProbeConverged = time.Time{}
-		t.searchLossCount = 0
-		if t.reprobeBackoffCount < maxReprobeBackoff {
-			t.reprobeBackoffCount++
 		}
 	}
 	t.probeSent = true
+	t.validating = false
 
 	// 探索範囲の中間を計算
 	// ロス回数が閾値未満の場合、low/high は変化していないので
@@ -208,10 +249,52 @@ func (t *MTUTracker) Probe(now time.Time) int {
 	return t.lastProbe
 }
 
+// NextDeadline is when this tracker next has something to do, for the run
+// loop's wake computation. Reporting nothing is always safe: it only means the
+// loop will not wake on our account.
+//
+// Without this the machine does not run at all on an idle connection. Probe's
+// interval is checked inside Probe, and nothing else arms a timer for it, so
+// Probe is reached only when the loop happens to wake for another reason -- and
+// an idle connection has its loss timer disarmed and its pacer skipped.
+func (t *MTUTracker) NextDeadline(now time.Time) (time.Time, bool) {
+	t.m.Lock()
+	defer t.m.Unlock()
+	if !t.probesDiscoverable() || t.probeSent {
+		return time.Time{}, false
+	}
+	if t.low <= t.high {
+		return now, true // searching: there is a probe to issue right now
+	}
+	next := t.lastValidation.Add(validationInterval)
+	if t.mtu < t.max {
+		reprobe := t.lastProbeConverged.Add(t.reProbeAfterConverged * time.Duration(1<<t.reprobeBackoffCount))
+		if reprobe.Before(next) {
+			next = reprobe
+		}
+	}
+	if next.Before(now) {
+		// Overdue rather than spinning: the wake that follows issues a probe,
+		// which sets probeSent and silences this until the probe resolves.
+		return now, true
+	}
+	return next, true
+}
+
+// BaseUnusable is how many times the search collapsed with the base itself
+// still being lost. Nothing below the base is attempted, so this is the number
+// that explains a connection answering small calls and hanging on large ones.
+func (t *MTUTracker) BaseUnusable() uint64 { return t.baseUnusable.Load() }
+
 func (t *MTUTracker) mayDetectConverged(now time.Time) {
 	if t.low > t.high {
 		if t.lastProbeConverged.IsZero() {
 			t.lastProbeConverged = now
+		}
+		if t.lastValidation.IsZero() {
+			// The first validation is an interval after convergence, not
+			// immediately: the search has just proven this size.
+			t.lastValidation = now
 		}
 	}
 }
@@ -219,6 +302,18 @@ func (t *MTUTracker) mayDetectConverged(now time.Time) {
 func (t *MTUTracker) OnACK(now time.Time) {
 	t.m.Lock()
 	defer t.m.Unlock()
+	wasValidating := t.validating
+	t.probeSent = false
+	t.validating = false
+
+	if wasValidating {
+		// The size already in use still crosses. That is the whole answer: it
+		// is not a search result, so it neither raises the estimate nor moves
+		// the search range.
+		t.validationLossCount = 0
+		return
+	}
+
 	// 成功したので連続ロスカウンタをリセット
 	t.searchLossCount = 0
 
@@ -230,14 +325,34 @@ func (t *MTUTracker) OnACK(now time.Time) {
 		}
 	}
 	t.low = t.lastProbe + 1
-	t.probeSent = false
 	t.mayDetectConverged(now)
 }
 
 func (t *MTUTracker) OnLost(now time.Time) {
 	t.m.Lock()
 	defer t.m.Unlock()
+	wasValidating := t.validating
 	t.probeSent = false
+	t.validating = false
+
+	if wasValidating {
+		t.validationLossCount++
+		if t.validationLossCount < 3 {
+			return
+		}
+		t.validationLossCount = 0
+		if t.mtu <= t.min {
+			// The base itself is not crossing. Nothing below it is attempted:
+			// RFC 9000 s14 -- "QUIC MUST NOT be used if the network path cannot
+			// support a maximum datagram size of at least 1200 bytes." Counted
+			// so the row explains a connection that answers small calls and
+			// hangs on large ones, rather than repaired.
+			t.baseUnusable.Add(1)
+			return
+		}
+		t.fallBackToBase()
+		return
+	}
 
 	// A probe at or below the current estimate is not search evidence. The
 	// search only ever probes ABOVE the estimate, so in the ordinary case this
@@ -286,6 +401,8 @@ func (t *MTUTracker) fallBackToBase() {
 	// because lastLargeACK is still the stale timestamp that produced this one.
 	t.largeLostSeen = false
 	t.lastLargeACK = time.Time{}
+	t.validating = false
+	t.lastValidation = time.Time{}
 	t.fallbacks.Add(1)
 	if t.onMTUUpdate != nil {
 		t.onMTUUpdate(t.mtu)
