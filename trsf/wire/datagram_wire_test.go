@@ -1,75 +1,26 @@
 package wire
 
-import (
-	"bytes"
-	"testing"
-)
+import "testing"
 
-func TestDatagramPacketRoundTrip(t *testing.T) {
-	payload := []byte("the quick brown fox")
+// A datagram has no kind of its own here, and these two tests are what keeps it
+// that way.
+//
+// The kind byte in the header position belongs to whoever owns its range:
+// 0x00..0x3F is the transport's, USER_DEFINED_START and above is the consumer's.
+// A datagram's byte is the CONSUMER's, and AutoReceive asks the consumer's own
+// predicate whether to route it. Giving the transport a datagram kind as well
+// would put two kind bytes on the wire to answer one question the range already
+// answers.
 
-	var out StreamAppPacket
-	out.Header.Kind = ApplicationPayloadKind_Datagram
-	if !out.SetDatagram(DatagramPacket{Data: payload}) {
-		t.Fatal("SetDatagram refused the payload although the header names the datagram kind")
-	}
-
-	encoded, err := out.EncodeCopy(nil)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	// One kind byte, then the payload verbatim: there is no length field
-	// because objproto never splits an application message, so rest-of-packet
-	// is exact.
-	if len(encoded) != 1+len(payload) {
-		t.Fatalf("encoded %d bytes for a %d-byte payload, want %d", len(encoded), len(payload), 1+len(payload))
-	}
-
-	var in StreamAppPacket
-	if err := in.DecodeExact(encoded); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if in.Header.Kind != ApplicationPayloadKind_Datagram {
-		t.Fatalf("decoded kind = %v, want datagram", in.Header.Kind)
-	}
-	got := in.Datagram()
-	if got == nil {
-		t.Fatal("decoded packet has no datagram arm")
-	}
-	if !bytes.Equal(got.Data, payload) {
-		t.Fatalf("payload = %q, want %q", got.Data, payload)
-	}
-}
-
-// An empty datagram is a legal payload, not a decode error: the consumer's own
-// framing decides what a zero-length body means.
-func TestEmptyDatagramRoundTrips(t *testing.T) {
-	var out StreamAppPacket
-	out.Header.Kind = ApplicationPayloadKind_Datagram
-	if !out.SetDatagram(DatagramPacket{}) {
-		t.Fatal("SetDatagram refused an empty payload")
-	}
-	encoded, err := out.EncodeCopy(nil)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-
-	var in StreamAppPacket
-	if err := in.DecodeExact(encoded); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got := in.Datagram(); got == nil || len(got.Data) != 0 {
-		t.Fatalf("decoded datagram = %v, want a present but empty payload", got)
-	}
-}
-
-// The predicate's membership and the union's arms are the same set written
-// twice in stream.bgn, and is_defined cannot derive one from the other. A kind
-// the union decodes but the predicate rejects never reaches the run loop and
-// disappears with no error anywhere, which is the direction that fails quietly.
-func TestDatagramIsRoutedToTheRunLoop(t *testing.T) {
-	if !IsStreamRelated(ApplicationPayloadKind_Datagram) {
-		t.Fatal("StreamAppPacket decodes the datagram kind but IsStreamRelated rejects it: AutoReceive would hand it to onEvent and it would vanish")
+// No consumer kind may be stream-related. If one were, the run loop would put
+// it through StreamAppPacket.DecodeExact, whose union has no arm for it, and it
+// would land in the "Unexpected packet" error — while the consumer's predicate,
+// the thing that is actually supposed to decide, was never asked.
+func TestNoConsumerKindIsStreamRelated(t *testing.T) {
+	for k := int(USER_DEFINED_START); k <= 0xFF; k++ {
+		if IsStreamRelated(ApplicationPayloadKind(k)) {
+			t.Fatalf("kind 0x%02X is in the consumer range but IsStreamRelated claims it", k)
+		}
 	}
 }
 
@@ -84,6 +35,24 @@ func TestConnectionKindsAreNotRoutedToTheRunLoop(t *testing.T) {
 	} {
 		if IsStreamRelated(k) {
 			t.Errorf("%v is handled inside AutoReceive but the predicate routes it to the run loop, where it can only fail to decode", k)
+		}
+	}
+}
+
+// Every kind the predicate claims must have an arm in the union. The two lists
+// are the same set written twice in stream.bgn and is_defined cannot derive one
+// from the other; a kind in the predicate with no arm reaches DecodeExact and
+// errors, which at least says so, while the reverse vanishes silently.
+func TestEveryStreamRelatedKindDecodes(t *testing.T) {
+	for k := 0; k < int(USER_DEFINED_START); k++ {
+		kind := ApplicationPayloadKind(k)
+		if !IsStreamRelated(kind) {
+			continue
+		}
+		var pkt StreamAppPacket
+		pkt.Header.Kind = kind
+		if _, err := pkt.EncodeCopy(nil); err != nil {
+			t.Errorf("%v is stream-related but StreamAppPacket cannot carry it: %v", kind, err)
 		}
 	}
 }

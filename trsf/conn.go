@@ -180,6 +180,20 @@ type Streams struct {
 	datagramsReceived   atomic.Uint64
 	datagramsDroppedRcv atomic.Uint64
 
+	// isDatagramKind is the CONSUMER's answer to "is this kind one of mine that
+	// you should acknowledge and deliver on the datagram queue". Held as a
+	// function so the core never learns what any consumer kind MEANS -- only
+	// which range it is in, which it already knew.
+	//
+	// Without it the only way to route a datagram would be a transport-owned
+	// kind wrapping the consumer's, and that is two kind bytes spent on one
+	// decision: the header position already carries a byte whose range says who
+	// owns it.
+	//
+	// Unset means no consumer kind is a datagram, so a connection whose owner
+	// never registered one behaves as it did before datagrams existed.
+	isDatagramKind atomic.Pointer[func(kind uint8) bool]
+
 	// datagramSend is deliberately SHALLOW. Every send goes through the run
 	// loop, so a handoff queue is structural -- but depth here is latency for a
 	// payload with no retransmission to wait for, so neither end of this queue
@@ -517,11 +531,39 @@ func (s *Streams) removeSendStream(streamID StreamID) {
 	delete(s.sendStreams, streamID)
 }
 
+// handleDatagram takes a packet whose kind byte belongs to the consumer.
+//
+// There is no decode: the packet IS the consumer's payload, kind byte included,
+// exactly as it was handed to SendDatagram. The transport never learns what the
+// kind means -- IsDatagramKind is the consumer's own predicate -- so nesting it
+// inside a transport-owned frame would have bought nothing and cost a byte.
+//
+// Ack-eliciting like stream data, and that is the point: without this the
+// sender cannot learn the datagram arrived, and nothing separates a path drop
+// from one this process made itself.
+func (s *Streams) handleDatagram(recvData *objproto.Message) {
+	s.pt.InsertUnacked(uint64(recvData.PacketNumber))
+	// Copied because the payload aliases the receive buffer, which the caller
+	// reuses for the next packet.
+	payload := make([]byte, len(recvData.Data))
+	copy(payload, recvData.Data)
+	select {
+	case s.datagramRecv <- payload:
+		s.datagramsReceived.Add(1)
+	default:
+		s.datagramsDroppedRcv.Add(1)
+	}
+}
+
 func (s *Streams) handlePacket(recvData *objproto.Message) {
 	// Liveness for the black-hole verdict. Any inbound packet, not just an ACK:
 	// in a hole none of our large packets are acknowledged, so an ACK-based
 	// signal would be absent on exactly the connection the verdict is for.
 	s.mtu.OnPeerActivity(time.Now())
+	if len(recvData.Data) > 0 && s.IsDatagramKind(recvData.Data[0]) {
+		s.handleDatagram(recvData)
+		return
+	}
 	pkt := wire.StreamAppPacket{}
 	err := pkt.DecodeExact(recvData.Data)
 	if err != nil {
@@ -594,22 +636,6 @@ func (s *Streams) handlePacket(recvData *objproto.Message) {
 			return
 		}
 		rs.onCancel()
-	} else if dg := pkt.Datagram(); dg != nil {
-		// Ack-eliciting like stream data, and that is the reason the frame is
-		// transport-owned at all: without this the sender has no way to learn
-		// the datagram arrived, and nothing could separate a path drop from one
-		// this process made itself.
-		s.pt.InsertUnacked(uint64(recvData.PacketNumber))
-		// Copied because the decoded payload aliases the receive buffer, which
-		// the caller reuses for the next packet.
-		payload := make([]byte, len(dg.Data))
-		copy(payload, dg.Data)
-		select {
-		case s.datagramRecv <- payload:
-			s.datagramsReceived.Add(1)
-		default:
-			s.datagramsDroppedRcv.Add(1)
-		}
 	} else {
 		s.logger.Error("unknown stream packet type received", "type", pkt.Header.Kind)
 	}
@@ -1118,15 +1144,11 @@ type pendingDatagram struct {
 	exempt  bool
 }
 
-// datagramFrameOverhead is the kind byte StreamAppPacket puts in front of the
-// payload. Named so no consumer restates the arithmetic in MaxDatagramSize.
-const datagramFrameOverhead = 1
-
 // MaxDatagramSize is the largest payload that fits one packet RIGHT NOW. It
 // moves with PLPMTUD, so callers must read it rather than cache it, and it is
 // the reason this arithmetic lives here rather than in every consumer.
 func (s *Streams) MaxDatagramSize() int {
-	return s.mtu.CurrentMTU() - fixedOverhead - datagramFrameOverhead
+	return s.mtu.CurrentMTU() - fixedOverhead
 }
 
 // SendDatagram queues one payload, subject to congestion control.
@@ -1142,7 +1164,16 @@ func (s *Streams) SendDatagram(b []byte) error { return s.sendDatagram(b, false)
 // sharing this very connection, because those are the only ones that yield.
 func (s *Streams) SendDatagramUncontrolled(b []byte) error { return s.sendDatagram(b, true) }
 
+// ErrDatagramKindReserved: the payload's leading byte is in the transport's own
+// kind range. It cannot be sent, because the peer's core would decode it as one
+// of its own kinds -- the range IS the ownership boundary, and it is the only
+// thing keeping one kind byte enough for both layers.
+var ErrDatagramKindReserved = errors.New("trsf: datagram kind is in the transport-reserved range")
+
 func (s *Streams) sendDatagram(b []byte, exempt bool) error {
+	if len(b) == 0 || b[0] < wire.USER_DEFINED_START {
+		return ErrDatagramKindReserved
+	}
 	if len(b) > s.MaxDatagramSize() {
 		s.datagramsDroppedOversize.Add(1)
 		return ErrDatagramTooLarge
@@ -1164,6 +1195,27 @@ func (s *Streams) sendDatagram(b []byte, exempt bool) error {
 	return nil
 }
 
+// SetDatagramKinds registers the consumer's predicate. Call it before the
+// connection carries traffic; a nil function clears it.
+func (s *Streams) SetDatagramKinds(fn func(kind uint8) bool) {
+	if fn == nil {
+		s.isDatagramKind.Store(nil)
+		return
+	}
+	s.isDatagramKind.Store(&fn)
+}
+
+// IsDatagramKind reports whether the consumer claims this kind. Transport-owned
+// kinds are never offered to the predicate: the range is the core's, and a
+// consumer that claimed one would be redefining a byte it does not own.
+func (s *Streams) IsDatagramKind(kind uint8) bool {
+	if kind < wire.USER_DEFINED_START {
+		return false
+	}
+	fn := s.isDatagramKind.Load()
+	return fn != nil && (*fn)(kind)
+}
+
 // trySendDatagram drains at most one queued datagram and reports whether it
 // pushed a SendAction. Called from the run loop BEFORE the congestion gate,
 // because the uncontrolled mode is defined by not being subject to that gate.
@@ -1180,17 +1232,13 @@ func (s *Streams) trySendDatagram(ack []byte) bool {
 		s.datagramsDroppedCongest.Add(1)
 		return false
 	}
-	var pkt wire.StreamAppPacket
-	pkt.Header.Kind = wire.ApplicationPayloadKind_Datagram
-	pkt.SetDatagram(wire.DatagramPacket{Data: dg.payload})
-	encoded, err := pkt.EncodeCopy(nil)
-	if err != nil {
-		s.logger.Error("failed to encode datagram", "error", err)
-		return false
-	}
+	// No wrapping. The caller's bytes already begin with their own kind byte,
+	// which sits in the same header position a transport kind would, so the
+	// packet is the payload.
+	encoded := dg.payload
 	pn := s.pnIssuer.ConsumePacketNumber()
 	s.sh.OnSent(&SentPacket{
-		Kind:             wire.ApplicationPayloadKind_Datagram,
+		Kind:             wire.ApplicationPayloadKind(encoded[0]),
 		PacketNumber:     pn,
 		PacketSize:       fixedOverhead + len(encoded),
 		SentTime:         time.Now(),

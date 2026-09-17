@@ -98,6 +98,19 @@ type Transport interface {
 	// the only ones that yield.
 	SendDatagramUncontrolled(b []byte) error
 
+	// SetDatagramKinds registers which of the consumer's own kinds are
+	// datagrams. Called once by the owner before the connection carries
+	// traffic; nil clears it and the connection then has no datagram kinds at
+	// all, which is how one behaves that never registered any.
+	SetDatagramKinds(fn func(kind uint8) bool)
+
+	// IsDatagramKind reports whether this leading kind byte is one the consumer
+	// registered as a datagram. AutoReceive asks before routing, which is how a
+	// consumer kind reaches the run loop and gets acknowledged without the core
+	// ever learning what it means -- and why a datagram needs no transport kind
+	// of its own wrapping it.
+	IsDatagramKind(kind uint8) bool
+
 	// MaxDatagramSize is the largest payload that fits one packet right now.
 	// It moves with PLPMTUD, so it is a live query rather than a constant, and
 	// it lives here so no consumer restates the arithmetic behind it.
@@ -204,6 +217,16 @@ func AutoReceive(ctx context.Context, p Transport, conn UnderlayingBidirectional
 		}
 		kind := wire.ApplicationPayloadKind(data.Data[0])
 		if wire.IsStreamRelated(kind) {
+			p.Send(data)
+			continue
+		}
+		// A consumer kind the consumer registered as a datagram goes to the run
+		// loop as well, and that is the whole of how a datagram is routed: it
+		// gets acknowledged there, without the core ever learning what the kind
+		// means. The predicate is asked ONLY about the consumer's own range --
+		// a transport kind is not the consumer's to claim, and asking would
+		// also reach for a Transport the ping/pong path does not require.
+		if uint8(kind) >= wire.USER_DEFINED_START && p.IsDatagramKind(uint8(kind)) {
 			p.Send(data)
 			continue
 		}

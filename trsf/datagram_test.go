@@ -19,21 +19,25 @@ func newQuietStreams(t *testing.T) *Streams {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	return NewStreams(ctx, true, DefaultInitialMTU, DefaultMaxMTU, &stubPNIssuer{}, logger).(*Streams)
+	s := NewStreams(ctx, true, DefaultInitialMTU, DefaultMaxMTU, &stubPNIssuer{}, logger).(*Streams)
+	s.SetDatagramKinds(isTestDatagramKind)
+	return s
 }
 
-func encodeDatagram(t *testing.T, payload []byte) []byte {
-	t.Helper()
-	var pkt wire.StreamAppPacket
-	pkt.Header.Kind = wire.ApplicationPayloadKind_Datagram
-	if !pkt.SetDatagram(wire.DatagramPacket{Data: payload}) {
-		t.Fatal("SetDatagram refused a payload under the datagram kind")
-	}
-	encoded, err := pkt.EncodeCopy(nil)
-	if err != nil {
-		t.Fatalf("encode datagram: %v", err)
-	}
-	return encoded
+// testDatagramKind stands in for a consumer kind. It is above
+// USER_DEFINED_START, so the transport never interprets it -- which is the
+// whole arrangement: the byte in the header position is the consumer's, and the
+// core asks the consumer's predicate rather than carrying a kind of its own.
+// The harness's appwire.AppKind_ForwardDatagram happens to be 0x48.
+const testDatagramKind = 0x48
+
+func isTestDatagramKind(kind uint8) bool { return kind == testDatagramKind }
+
+// dgram is a datagram as it appears on the wire: the consumer's kind byte, then
+// its body. There is no wrapper, so this is also exactly what SendDatagram
+// takes and what ReceiveDatagram returns.
+func dgram(body string) []byte {
+	return append([]byte{testDatagramKind}, body...)
 }
 
 // A received datagram reaches the application through its own queue, and its
@@ -42,9 +46,9 @@ func encodeDatagram(t *testing.T, payload []byte) []byte {
 // from a drop.
 func TestReceivedDatagramIsQueuedAndAckEliciting(t *testing.T) {
 	s := newQuietStreams(t)
-	payload := []byte("hello datagram")
+	payload := dgram("hello datagram")
 
-	s.handlePacket(&objproto.Message{Data: encodeDatagram(t, payload), PacketNumber: 42})
+	s.handlePacket(&objproto.Message{Data: payload, PacketNumber: 42})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -80,7 +84,7 @@ func TestReceivedDatagramIsQueuedAndAckEliciting(t *testing.T) {
 // which is what separates it from stream data carrying the same bytes.
 func TestReceivedDatagramCreatesNoStream(t *testing.T) {
 	s := newQuietStreams(t)
-	s.handlePacket(&objproto.Message{Data: encodeDatagram(t, []byte("x")), PacketNumber: 1})
+	s.handlePacket(&objproto.Message{Data: dgram("x"), PacketNumber: 1})
 
 	st := s.GetInternalState()
 	if st.ActiveReceiveStreams != 0 || st.ActiveSendStreams != 0 {
@@ -98,7 +102,7 @@ func TestReceiveQueueOverflowDropsAndCounts(t *testing.T) {
 
 	for i := range over {
 		s.handlePacket(&objproto.Message{
-			Data:         encodeDatagram(t, []byte("payload")),
+			Data:         dgram("payload"),
 			PacketNumber: objproto.PacketNumber(i),
 		})
 	}
@@ -130,7 +134,9 @@ func newLiveStreams(t *testing.T) *Streams {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	return NewStreams(ctx, false, DefaultInitialMTU, DefaultMaxMTU, &stubPNIssuer{}, logger).(*Streams)
+	s := NewStreams(ctx, false, DefaultInitialMTU, DefaultMaxMTU, &stubPNIssuer{}, logger).(*Streams)
+	s.SetDatagramKinds(isTestDatagramKind)
+	return s
 }
 
 // fillCongestionWindow puts enough in flight that CanSend() is false. It uses
@@ -168,12 +174,9 @@ func nextDatagramAction(t *testing.T, s *Streams) []byte {
 		if action.Data == nil {
 			continue
 		}
-		var pkt wire.StreamAppPacket
-		if err := pkt.DecodeExact(action.Data); err != nil {
-			continue
-		}
-		if dg := pkt.Datagram(); dg != nil {
-			return dg.Data
+		// The action's bytes ARE the datagram; there is nothing to unwrap.
+		if action.Data[0] == testDatagramKind {
+			return action.Data
 		}
 	}
 	t.Fatal("no datagram appeared among the emitted SendActions")
@@ -187,11 +190,15 @@ func nextDatagramAction(t *testing.T, s *Streams) []byte {
 func TestMaxDatagramSizeRefusesAndCountsOversize(t *testing.T) {
 	s := newLiveStreams(t)
 	max := s.MaxDatagramSize()
-	if max != DefaultInitialMTU-fixedOverhead-datagramFrameOverhead {
-		t.Fatalf("MaxDatagramSize() = %d, want %d", max, DefaultInitialMTU-fixedOverhead-datagramFrameOverhead)
+	// No frame overhead to subtract: the consumer's kind byte occupies the
+	// header position a transport kind used to, so the packet is the payload.
+	if max != DefaultInitialMTU-fixedOverhead {
+		t.Fatalf("MaxDatagramSize() = %d, want %d", max, DefaultInitialMTU-fixedOverhead)
 	}
 
-	if err := s.SendDatagram(make([]byte, max+1)); err != ErrDatagramTooLarge {
+	oversize := make([]byte, max+1)
+	oversize[0] = testDatagramKind
+	if err := s.SendDatagram(oversize); err != ErrDatagramTooLarge {
 		t.Fatalf("oversized send returned %v, want ErrDatagramTooLarge", err)
 	}
 	if got := s.GetInternalState().DatagramsDroppedOversize; got != 1 {
@@ -206,7 +213,7 @@ func TestControlledDatagramIsDroppedWhenTheWindowIsClosed(t *testing.T) {
 	s := newLiveStreams(t)
 	fillCongestionWindow(t, s)
 
-	if err := s.SendDatagram([]byte("payload")); err != ErrCongestionBlocked {
+	if err := s.SendDatagram(dgram("payload")); err != ErrCongestionBlocked {
 		t.Fatalf("send with a closed window returned %v, want ErrCongestionBlocked", err)
 	}
 	st := s.GetInternalState()
@@ -225,7 +232,7 @@ func TestUncontrolledDatagramIsSentWithTheWindowClosed(t *testing.T) {
 	s := newLiveStreams(t)
 	fillCongestionWindow(t, s)
 
-	payload := []byte("uncontrolled payload")
+	payload := dgram("uncontrolled payload")
 	if err := s.SendDatagramUncontrolled(payload); err != nil {
 		t.Fatalf("uncontrolled send with a closed window: %v", err)
 	}
@@ -241,7 +248,7 @@ func TestUncontrolledDatagramIsSentWithTheWindowClosed(t *testing.T) {
 // The ordinary path: an open window, and the payload comes out intact.
 func TestControlledDatagramReachesTheWire(t *testing.T) {
 	s := newLiveStreams(t)
-	payload := []byte("controlled payload")
+	payload := dgram("controlled payload")
 	if err := s.SendDatagram(payload); err != nil {
 		t.Fatalf("SendDatagram: %v", err)
 	}
@@ -262,7 +269,7 @@ func TestControlledDatagramReachesTheWire(t *testing.T) {
 // it is not. This is the property the two modes are named for.
 func TestOnlyControlledDatagramsOccupyTheWindow(t *testing.T) {
 	controlled := newLiveStreams(t)
-	if err := controlled.SendDatagram([]byte("payload")); err != nil {
+	if err := controlled.SendDatagram(dgram("payload")); err != nil {
 		t.Fatalf("SendDatagram: %v", err)
 	}
 	nextDatagramAction(t, controlled)
@@ -271,11 +278,44 @@ func TestOnlyControlledDatagramsOccupyTheWindow(t *testing.T) {
 	}
 
 	uncontrolled := newLiveStreams(t)
-	if err := uncontrolled.SendDatagramUncontrolled([]byte("payload")); err != nil {
+	if err := uncontrolled.SendDatagramUncontrolled(dgram("payload")); err != nil {
 		t.Fatalf("SendDatagramUncontrolled: %v", err)
 	}
 	nextDatagramAction(t, uncontrolled)
 	if got := uncontrolled.GetInternalState().BytesInFlight; got != 0 {
 		t.Errorf("BytesInFlight = %d after an uncontrolled datagram, want 0", got)
+	}
+}
+
+// The range IS the ownership boundary, and it is the only thing that lets one
+// kind byte serve both layers. A payload whose leading byte lands in the
+// transport's range would be decoded by the peer's core as one of its own
+// kinds, so it is refused here rather than sent.
+func TestDatagramWithATransportKindIsRefused(t *testing.T) {
+	s := newLiveStreams(t)
+	for _, kind := range []uint8{
+		uint8(wire.ApplicationPayloadKind_StreamData),
+		uint8(wire.ApplicationPayloadKind_Ping),
+		wire.USER_DEFINED_START - 1,
+	} {
+		if err := s.SendDatagram([]byte{kind, 'x'}); err != ErrDatagramKindReserved {
+			t.Errorf("SendDatagram with leading kind 0x%02X returned %v, want ErrDatagramKindReserved", kind, err)
+		}
+	}
+	if err := s.SendDatagram(nil); err != ErrDatagramKindReserved {
+		t.Errorf("SendDatagram(nil) returned %v, want ErrDatagramKindReserved: an empty payload has no kind byte", err)
+	}
+}
+
+// An unregistered consumer kind is not a datagram. It reaches AutoReceive's
+// application seam like any other control message, which is what keeps the
+// datagram queue to things the consumer actually asked for.
+func TestAnUnregisteredConsumerKindIsNotADatagram(t *testing.T) {
+	s := newQuietStreams(t)
+	if s.IsDatagramKind(testDatagramKind + 1) {
+		t.Error("a consumer kind nobody registered is being claimed as a datagram")
+	}
+	if s.IsDatagramKind(uint8(wire.ApplicationPayloadKind_StreamData)) {
+		t.Error("a transport kind was offered to the consumer predicate and claimed")
 	}
 }
