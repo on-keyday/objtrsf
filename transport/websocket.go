@@ -23,14 +23,20 @@ import (
 type WebSocketConn struct {
 	conn       *websocket.Conn
 	remoteAddr netip.AddrPort
-	cancel     context.CancelFunc
+	// transport is the objproto transport this connection's packets are
+	// delivered under: "wss" over TLS, "ws" otherwise. objproto keys a
+	// connection by its full ConnectionID, transport included, so it must
+	// equal the transport of the CID the peer is addressed by.
+	transport string
+	cancel    context.CancelFunc
 }
 
 // newWebSocketConn creates a new WebSocketConn.
-func newWebSocketConn(conn *websocket.Conn, remoteAddr netip.AddrPort, cancel context.CancelFunc) *WebSocketConn {
+func newWebSocketConn(conn *websocket.Conn, remoteAddr netip.AddrPort, transport string, cancel context.CancelFunc) *WebSocketConn {
 	return &WebSocketConn{
 		conn:       conn,
 		remoteAddr: remoteAddr,
+		transport:  transport,
 		cancel:     cancel,
 	}
 }
@@ -96,7 +102,7 @@ func (m *connectionMap) Delete(addr netip.AddrPort) {
 // error for EndpointModeServer. So Handshake packets only reach this loop
 // from Client or Mutual endpoints; for pure Server callers dialPath being
 // empty is safe because no Handshake is ever observed.
-func startTransportLoops(rawSess objproto.RawEndpoint, transportName string,
+func startTransportLoops(rawSess objproto.RawEndpoint,
 	connChan chan *WebSocketConn, connMap *connectionMap,
 	senderChannel <-chan *objproto.PacketData,
 	tlsConf *tls.Config, dialPath string, logger *slog.Logger) {
@@ -120,7 +126,7 @@ func startTransportLoops(rawSess objproto.RawEndpoint, transportName string,
 						CloseConnectionsAt(rawSess, c.remoteAddr, logger)
 						return
 					}
-					rawSess.Receive(transportName, c.remoteAddr, recv)
+					rawSess.Receive(c.transport, c.remoteAddr, recv)
 				}
 			}(conn)
 		}
@@ -132,11 +138,17 @@ func startTransportLoops(rawSess objproto.RawEndpoint, transportName string,
 			if !ok {
 				if pkt.Kind == packet.PacketKind_Handshake {
 					go func() {
-						wsScheme := "ws"
-						httpScheme := "http"
-						if tlsConf != nil {
-							wsScheme = "wss"
-							httpScheme = "https"
+						// The scheme is the destination's, not the endpoint's: one
+						// endpoint may reach both ws and wss peers.
+						wsScheme, httpScheme := "ws", "http"
+						if pkt.To.Transport == "wss" {
+							if tlsConf == nil {
+								logger.Error("wss dial needs WebSocketConfig.TLS; not falling back to ws",
+									slog.String("address", pkt.To.Addr.String()))
+								rawSess.CannotSend(pkt)
+								return
+							}
+							wsScheme, httpScheme = "wss", "https"
 						}
 						conf := &websocket.Config{
 							Location: &url.URL{
@@ -157,7 +169,7 @@ func startTransportLoops(rawSess objproto.RawEndpoint, transportName string,
 							rawSess.CannotSend(pkt)
 							return
 						}
-						conn := newWebSocketConn(ws, pkt.To.Addr, func() {})
+						conn := newWebSocketConn(ws, pkt.To.Addr, wsScheme, func() {})
 						connMap.Set(pkt.To.Addr, conn)
 						err = conn.Send(pkt.Data)
 						if err != nil {
@@ -186,12 +198,10 @@ func startTransportLoops(rawSess objproto.RawEndpoint, transportName string,
 
 // newAcceptHandler builds the http.Handler that upgrades incoming WS
 // connections, registers them in connMap, and feeds them into connChan
-// for the recv loop to pick up.
-func newAcceptHandler(connChan chan<- *WebSocketConn, connMap *connectionMap, tlsConf *tls.Config, logger *slog.Logger) http.Handler {
+// for the recv loop to pick up. A connection is labelled "wss" when its
+// request arrived over TLS (the caller's http.Server terminates it).
+func newAcceptHandler(connChan chan<- *WebSocketConn, connMap *connectionMap, logger *slog.Logger) http.Handler {
 	return &websocket.Server{
-		Config: websocket.Config{
-			TlsConfig: tlsConf,
-		},
 		Handshake: func(c *websocket.Config, r *http.Request) error {
 			var err error
 			c.Origin, err = websocket.Origin(c, r)
@@ -209,21 +219,16 @@ func newAcceptHandler(connChan chan<- *WebSocketConn, connMap *connectionMap, tl
 				cancel()
 				return
 			}
-			conn := newWebSocketConn(ws, remoteAddr, cancel)
+			transport := "ws"
+			if ws.Request().TLS != nil {
+				transport = "wss"
+			}
+			conn := newWebSocketConn(ws, remoteAddr, transport, cancel)
 			connMap.Set(remoteAddr, conn)
 			connChan <- conn
 			<-ctx.Done()
 		},
 	}
-}
-
-// transportName returns "wss" if a TLS config is supplied, "ws" otherwise.
-// Used to tag PacketData with the right transport identifier.
-func transportName(tlsConf *tls.Config) string {
-	if tlsConf != nil {
-		return "wss"
-	}
-	return "ws"
 }
 
 // WebSocketEndpoint constructs a WebSocket-backed objproto Endpoint in the
@@ -289,7 +294,7 @@ func WebSocketEndpointEx(rawSess objproto.RawEndpoint, mux *http.ServeMux, cfg W
 	// no mux is now a valid "dial-only transport + bidirectional objproto"
 	// configuration used by dial-mode runners.
 	if mux != nil {
-		mux.Handle(cfg.Path, newAcceptHandler(connChan, connMap, cfg.TLS, cfg.Logger))
+		mux.Handle(cfg.Path, newAcceptHandler(connChan, connMap, cfg.Logger))
 	}
 
 	// dialPath: Client/Mutual will dial outbound, Server will not.
@@ -303,7 +308,7 @@ func WebSocketEndpointEx(rawSess objproto.RawEndpoint, mux *http.ServeMux, cfg W
 	if sendTo == nil {
 		sendTo = rawSess.GetSenderChannel()
 	}
-	startTransportLoops(rawSess, transportName(cfg.TLS), connChan, connMap,
+	startTransportLoops(rawSess, connChan, connMap,
 		sendTo, cfg.TLS, dialPath, cfg.Logger)
 	return nil
 }

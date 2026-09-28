@@ -41,11 +41,6 @@ func WebSocketEndpointEx(rawSess objproto.RawEndpoint, mux *http.ServeMux, cfg W
 		return errors.New("websocket_wasm: mux must be nil in wasm Client mode")
 	}
 
-	transportName := "ws"
-	if cfg.TLS != nil {
-		transportName = "wss"
-	}
-
 	var connsMu sync.Mutex
 	conns := make(map[netip.AddrPort]*wasmWSConn)
 	logger := cfg.Logger
@@ -74,7 +69,7 @@ func WebSocketEndpointEx(rawSess objproto.RawEndpoint, mux *http.ServeMux, cfg W
 					rawSess.CannotSend(pkt)
 					continue
 				}
-				go dialAndSend(rawSess, transportName, &connsMu, conns, pkt, cfg, logger)
+				go dialAndSend(rawSess, &connsMu, conns, pkt, cfg, logger)
 				continue
 			}
 			if err := conn.send(pkt.Data); err != nil {
@@ -109,15 +104,16 @@ type wasmWSConn struct {
 
 func dialAndSend(
 	rawSess objproto.RawEndpoint,
-	transportName string,
 	connsMu *sync.Mutex,
 	conns map[netip.AddrPort]*wasmWSConn,
 	pkt *objproto.PacketData,
 	cfg WebSocketConfig,
 	logger *slog.Logger,
 ) {
+	// The scheme is the destination's; the browser performs the TLS, so
+	// cfg.TLS is not consulted here.
 	scheme := "ws"
-	if cfg.TLS != nil {
+	if pkt.To.Transport == "wss" {
 		scheme = "wss"
 	}
 	url := fmt.Sprintf("%s://%s%s", scheme, pkt.To.Addr.String(), cfg.Path)
@@ -208,7 +204,7 @@ func dialAndSend(
 		for {
 			select {
 			case data := <-conn.incoming:
-				rawSess.Receive(transportName, conn.remoteAddr, data)
+				rawSess.Receive(scheme, conn.remoteAddr, data)
 			case <-conn.closed:
 				connsMu.Lock()
 				delete(conns, conn.remoteAddr)
