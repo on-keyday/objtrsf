@@ -52,8 +52,17 @@ import "io"
 // persists on the terminal and confines/mis-positions all subsequent output —
 // for a bubbletea host TUI this looks like panels shifted up with a blank lower
 // half (NOT a size bug; verified on the Windows ConPTY repro — the reported
-// size stays correct throughout, only the scroll region is wrong). Resetting
-// both is idempotent on a terminal already at defaults.
+// size stays correct throughout, only the scroll region is wrong).
+//
+// Both of those HOME THE CURSOR as a side effect, which is why they sit inside
+// a DECSC/DECRC pair (`\x1b7` … `\x1b8`). Without it the reset was not
+// idempotent on a terminal already at defaults after all: the modes were
+// unchanged but the cursor jumped to row 1, so whatever the caller printed next
+// — the shell prompt after `exec -t`, after detaching from a shell session —
+// overwrote the top of the screen. The restore also brings back the origin mode
+// saved with the position, so a DECOM an app left on stays on; with the scroll
+// region back to the full window it addresses the same cells as off, which is
+// what the reset is for.
 const ScreenModeReset = "" +
 	"\x1b[?9001l" + // Win32 Input Mode off
 	"\x1b[>4;0m" + // modifyOtherKeys off
@@ -64,8 +73,10 @@ const ScreenModeReset = "" +
 	"\x1b[?1003l" + // mouse: any-event tracking
 	"\x1b[?1006l" + // mouse: SGR coordinates
 	"\x1b[?2004l" + // bracketed paste
-	"\x1b[r" + // DECSTBM: scroll region back to the full window
+	"\x1b7" + // DECSC: keep the cursor across the two homing resets below
 	"\x1b[?6l" + // DECOM: origin mode
+	"\x1b[r" + // DECSTBM: scroll region back to the full window
+	"\x1b8" + // DECRC: cursor back where it was
 	"\x1b[0m" // SGR reset
 
 // InputModeReset stops the local terminal from SENDING things, and is written

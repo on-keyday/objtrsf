@@ -38,3 +38,20 @@ func TestWriteTerminalReset_IsExactlyTheTwoConsts(t *testing.T) {
 		t.Errorf("WriteTerminalReset wrote %q, want ScreenModeReset+InputModeReset", buf.String())
 	}
 }
+
+// DECSTBM and DECOM each home the cursor, so on a terminal already at defaults
+// the reset used to move the caller's next output to row 1. Both are wrapped in
+// DECSC/DECRC, which keeps the position: the save must come before the first of
+// them and the restore after the last.
+func TestScreenModeReset_KeepsTheCursorAcrossTheHomingResets(t *testing.T) {
+	save := strings.Index(ScreenModeReset, "\x1b7")
+	restore := strings.LastIndex(ScreenModeReset, "\x1b8")
+	stbm := strings.Index(ScreenModeReset, "\x1b[r")
+	decom := strings.Index(ScreenModeReset, "\x1b[?6l")
+	if save < 0 || restore < 0 {
+		t.Fatalf("ScreenModeReset has no DECSC/DECRC pair: %q", ScreenModeReset)
+	}
+	if !(save < stbm && save < decom && stbm < restore && decom < restore) {
+		t.Fatalf("DECSTBM (%d) and DECOM (%d) must sit between DECSC (%d) and DECRC (%d)", stbm, decom, save, restore)
+	}
+}
