@@ -73,6 +73,11 @@ func NewRandomConnectionID(transport string, addr netip.AddrPort) (ConnectionID,
 }
 
 func (c ConnectionID) String() string {
+	if c.Transport == TransportVsock {
+		if cid, port, ok := VsockFromAddrPort(c.Addr); ok {
+			return fmt.Sprintf("%s:%d:%d-%d", c.Transport, cid, port, c.ID)
+		}
+	}
 	return fmt.Sprintf("%s:%s-%d", c.Transport, c.Addr.String(), c.ID)
 }
 
@@ -97,8 +102,14 @@ func ParseConnectionID(s string, opt ParseOption) (ConnectionID, error) {
 	if !found {
 		return ConnectionID{}, fmt.Errorf("invalid connection ID format")
 	}
-	addr, err := netip.ParseAddrPort(addrStr)
-	if err != nil {
+	var addr netip.AddrPort
+	var err error
+	if transport == TransportVsock {
+		addr, err = parseVsockAddr(addrStr)
+		if err != nil {
+			return ConnectionID{}, err
+		}
+	} else if addr, err = netip.ParseAddrPort(addrStr); err != nil {
 		if !opt.Has(ParseOption_ResolveAddr) {
 			return ConnectionID{}, err
 		}
