@@ -39,10 +39,7 @@ func ClientEndpoint(logger *slog.Logger, addr string, udpPort uint16) (objproto.
 }
 
 // UDPWebsocketDualStackConfig configures a UDP+WebSocket dual stack
-// Endpoint that shares a single objproto RawEndpoint across both
-// transports. The fan-out goroutine is the *single* reader of
-// rawSess.GetSenderChannel(); UDP / WS legs each read from a dedicated
-// bounded channel that the fan-out feeds based on pkt.To.Transport.
+// Endpoint: MultiLegEndpoint with a UDPLeg and a WebSocketLeg.
 //
 // WS.Mode selects the WS leg behaviour (Client / Server / Mutual). Mux
 // must be non-nil for Server / Mutual; nil for Client.
@@ -58,53 +55,11 @@ type UDPWebsocketDualStack struct {
 }
 
 func UDPWebsocketDualStackEndpoint(cfg UDPWebsocketDualStackConfig) (UDPWebsocketDualStack, error) {
-	rawSess := objproto.NewEndpoint(cfg.Logger, cfg.WS.Mode)
-	udpChan := make(chan *objproto.PacketData, 100)
-	wsChan := make(chan *objproto.PacketData, 100)
-
-	if _, err := UDPEndpointEx(rawSess, cfg.Logger, cfg.UDPPort, udpChan); err != nil {
+	ep, err := MultiLegEndpoint(cfg.Logger, cfg.WS.Mode,
+		UDPLeg(cfg.Logger, cfg.UDPPort),
+		WebSocketLeg(cfg.Mux, cfg.WS))
+	if err != nil {
 		return UDPWebsocketDualStack{}, err
 	}
-
-	if err := WebSocketEndpointEx(rawSess, cfg.Mux, cfg.WS, wsChan); err != nil {
-		return UDPWebsocketDualStack{}, err
-	}
-
-	// Fan-out: the single reader of rawSess.GetSenderChannel() routes
-	// packets to the per-transport sender channel. Both UDP and WS legs
-	// were constructed with explicit sendTo, so they do not race against
-	// this loop on the source channel.
-	go fanOutByTransport(rawSess, rawSess.GetSenderChannel(), udpChan, wsChan, cfg.Logger)
-
-	return UDPWebsocketDualStack{Endpoint: rawSess}, nil
-}
-
-// fanOutByTransport reads packets from src and routes them by
-// pkt.To.Transport. Extracted so dualstack_test.go can drive it without
-// binding a real UDP port. cancelSink is invoked for packets whose
-// transport is unknown so the upper layer can mark them as undeliverable.
-func fanOutByTransport(
-	cancelSink interface {
-		CannotSend(*objproto.PacketData)
-	},
-	src <-chan *objproto.PacketData,
-	udpDst, wsDst chan<- *objproto.PacketData,
-	logger *slog.Logger,
-) {
-	for pkt := range src {
-		switch pkt.To.Transport {
-		case "udp":
-			udpDst <- pkt
-		case "ws", "wss":
-			wsDst <- pkt
-		default:
-			if logger != nil {
-				logger.Error("unsupported transport for udp-websocket session",
-					slog.String("transport", pkt.To.Transport))
-			}
-			if cancelSink != nil {
-				cancelSink.CannotSend(pkt)
-			}
-		}
-	}
+	return UDPWebsocketDualStack{Endpoint: ep}, nil
 }

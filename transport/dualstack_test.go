@@ -30,6 +30,11 @@ func mkPacket(transport string) *objproto.PacketData {
 	}
 }
 
+// udpWSRoutes is the route set a UDPLeg + WebSocketLeg endpoint builds.
+func udpWSRoutes(udpDst, wsDst chan *objproto.PacketData) map[string]chan<- *objproto.PacketData {
+	return map[string]chan<- *objproto.PacketData{"udp": udpDst, "ws": wsDst, "wss": wsDst}
+}
+
 func recvWithTimeout(t *testing.T, ch <-chan *objproto.PacketData, want int, timeout time.Duration) []*objproto.PacketData {
 	t.Helper()
 	got := make([]*objproto.PacketData, 0, want)
@@ -52,7 +57,7 @@ func TestFanOutByTransport_RoutesUDPAndWS(t *testing.T) {
 	wsDst := make(chan *objproto.PacketData, 8)
 	sink := &fakeCancelSink{}
 
-	go fanOutByTransport(sink, src, udpDst, wsDst, nil)
+	go fanOutByTransport(sink, src, udpWSRoutes(udpDst, wsDst), nil)
 
 	src <- mkPacket("udp")
 	src <- mkPacket("ws")
@@ -82,7 +87,7 @@ func TestFanOutByTransport_UnsupportedRoutesToCannotSend(t *testing.T) {
 	wsDst := make(chan *objproto.PacketData, 4)
 	sink := &fakeCancelSink{}
 
-	go fanOutByTransport(sink, src, udpDst, wsDst, nil)
+	go fanOutByTransport(sink, src, udpWSRoutes(udpDst, wsDst), nil)
 
 	src <- mkPacket("bogus")
 	src <- mkPacket("smtp") // also unsupported
@@ -118,7 +123,7 @@ func TestFanOutByTransport_NoLossUnderConcurrency(t *testing.T) {
 	wsDst := make(chan *objproto.PacketData, n)
 	sink := &fakeCancelSink{}
 
-	go fanOutByTransport(sink, src, udpDst, wsDst, nil)
+	go fanOutByTransport(sink, src, udpWSRoutes(udpDst, wsDst), nil)
 
 	go func() {
 		for i := 0; i < n; i++ {
