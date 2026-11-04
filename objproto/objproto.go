@@ -93,15 +93,19 @@ const (
 )
 
 func ParseConnectionID(s string, opt ParseOption) (ConnectionID, error) {
-	// split by first ':' then split by '-'
+	// The transport ends at the first ':' and the id begins after the LAST '-':
+	// an id is decimal or '*', so it holds no '-', while a host name may
+	// (ec2-1-2-3-4.compute.amazonaws.com). IP literals and vsock cid:port hold
+	// none, so for them first and last are the same '-'.
 	transport, rest, found := strings.Cut(s, ":")
 	if !found {
 		return ConnectionID{}, fmt.Errorf("invalid connection ID format")
 	}
-	addrStr, idStr, found := strings.Cut(rest, "-")
-	if !found {
+	sep := strings.LastIndexByte(rest, '-')
+	if sep < 0 {
 		return ConnectionID{}, fmt.Errorf("invalid connection ID format")
 	}
+	addrStr, idStr := rest[:sep], rest[sep+1:]
 	var addr netip.AddrPort
 	var err error
 	if transport == TransportVsock {
