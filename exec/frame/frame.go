@@ -42,15 +42,15 @@ type FrameHeader struct {
 	Len  uint32
 }
 
-func (f *FrameHeader) Write(tmp49 io.Writer) error {
-	tmp183 := [1]uint8{}
-	tmp183[0] = uint8(f.Type)
-	if _, err := tmp49.Write(tmp183[:1]); err != nil {
+func (f *FrameHeader) Write(tmp50 io.Writer) error {
+	tmp184 := [1]uint8{}
+	tmp184[0] = uint8(f.Type)
+	if _, err := tmp50.Write(tmp184[:1]); err != nil {
 		return err
 	}
 	tmp182 := [4]uint8{}
 	binary.BigEndian.PutUint32(tmp182[:], uint32(f.Len))
-	if _, err := tmp49.Write(tmp182[:4]); err != nil {
+	if _, err := tmp50.Write(tmp182[:4]); err != nil {
 		return err
 	}
 	return nil
@@ -70,21 +70,21 @@ func (s *FrameHeader) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (f *FrameHeader) EncodeSlice(tmp49 []byte, tmp49Offset *int) error {
-	tmp183 := []uint8{}
-	if len(tmp49)-*tmp49Offset < int(1) {
+func (f *FrameHeader) EncodeSlice(tmp50 []byte, tmp50Offset *int) error {
+	tmp184 := []uint8{}
+	if len(tmp50)-*tmp50Offset < int(1) {
 		return errors.New("not enough space to reserve data for field \"FrameHeader::Type\"")
 	}
-	tmp183 = tmp49[*tmp49Offset : *tmp49Offset+int(1)]
-	tmp183[0] = uint8(f.Type)
-	*tmp49Offset += int(1)
+	tmp184 = tmp50[*tmp50Offset : *tmp50Offset+int(1)]
+	tmp184[0] = uint8(f.Type)
+	*tmp50Offset += int(1)
 	tmp182 := []uint8{}
-	if len(tmp49)-*tmp49Offset < int(4) {
+	if len(tmp50)-*tmp50Offset < int(4) {
 		return errors.New("not enough space to reserve data for field \"FrameHeader::Len\"")
 	}
-	tmp182 = tmp49[*tmp49Offset : *tmp49Offset+int(4)]
+	tmp182 = tmp50[*tmp50Offset : *tmp50Offset+int(4)]
 	binary.BigEndian.PutUint32(tmp182[:], uint32(f.Len))
-	*tmp49Offset += int(4)
+	*tmp50Offset += int(4)
 	return nil
 }
 func (s *FrameHeader) Encode(buf []byte) ([]byte, error) {
@@ -102,14 +102,14 @@ func (s *FrameHeader) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (f *FrameHeader) Append(tmp49 []byte) ([]byte, error) {
-	tmp183 := [1]uint8{}
-	tmp183[0] = uint8(f.Type)
-	tmp49 = append(tmp49, tmp183[:1]...)
+func (f *FrameHeader) Append(tmp50 []byte) ([]byte, error) {
+	tmp184 := [1]uint8{}
+	tmp184[0] = uint8(f.Type)
+	tmp50 = append(tmp50, tmp184[:1]...)
 	tmp182 := [4]uint8{}
 	binary.BigEndian.PutUint32(tmp182[:], uint32(f.Len))
-	tmp49 = append(tmp49, tmp182[:4]...)
-	return tmp49, nil
+	tmp50 = append(tmp50, tmp182[:4]...)
+	return tmp50, nil
 }
 func (s *FrameHeader) MustAppend(buf []byte) []byte {
 	var err error
@@ -120,19 +120,19 @@ func (s *FrameHeader) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (f *FrameHeader) Read(tmp50 io.Reader) error {
-	tmp188 := uint8(0)
-	tmp187 := [1]uint8{}
-	if _, err := io.ReadFull(tmp50, tmp187[0:0+1]); err != nil {
+func (f *FrameHeader) Read(tmp52 io.Reader) error {
+	tmp190 := uint8(0)
+	tmp189 := [1]uint8{}
+	if _, err := io.ReadFull(tmp52, tmp189[0:0+1]); err != nil {
 		return err
 	}
-	tmp188 = tmp187[0]
-	f.Type = FrameType(tmp188)
-	tmp185 := [4]uint8{}
-	if _, err := io.ReadFull(tmp50, tmp185[0:0+4]); err != nil {
+	tmp190 = tmp189[0]
+	f.Type = FrameType(tmp190)
+	tmp188 := [4]uint8{}
+	if _, err := io.ReadFull(tmp52, tmp188[0:0+4]); err != nil {
 		return err
 	}
-	f.Len = binary.BigEndian.Uint32(tmp185[:])
+	f.Len = binary.BigEndian.Uint32(tmp188[:])
 	return nil
 }
 func (s *FrameHeader) DecodeCopy(buf []byte) ([]byte, error) {
@@ -153,23 +153,23 @@ func (s *FrameHeader) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (f *FrameHeader) DecodeSlice(tmp50 []byte, tmp50Offset *int) error {
-	tmp188 := uint8(0)
-	tmp187 := []uint8{}
-	if len(tmp50)-*tmp50Offset < 1 {
+func (f *FrameHeader) DecodeSlice(tmp52 []byte, tmp52Offset *int) error {
+	tmp190 := uint8(0)
+	tmp189 := []uint8{}
+	if len(tmp52)-*tmp52Offset < 1 {
 		return errors.New("not enough data to read for field \"FrameHeader::Type\"")
 	}
-	tmp187 = tmp50[*tmp50Offset : *tmp50Offset+1]
-	*tmp50Offset += int(1)
-	tmp188 = tmp187[0]
-	f.Type = FrameType(tmp188)
-	tmp185 := []uint8{}
-	if len(tmp50)-*tmp50Offset < 4 {
+	tmp189 = tmp52[*tmp52Offset : *tmp52Offset+1]
+	*tmp52Offset += int(1)
+	tmp190 = tmp189[0]
+	f.Type = FrameType(tmp190)
+	tmp188 := []uint8{}
+	if len(tmp52)-*tmp52Offset < 4 {
 		return errors.New("not enough data to read for field \"FrameHeader::Len\"")
 	}
-	tmp185 = tmp50[*tmp50Offset : *tmp50Offset+4]
-	*tmp50Offset += int(4)
-	f.Len = binary.BigEndian.Uint32(tmp185[:])
+	tmp188 = tmp52[*tmp52Offset : *tmp52Offset+4]
+	*tmp52Offset += int(4)
+	f.Len = binary.BigEndian.Uint32(tmp188[:])
 	return nil
 }
 func (s *FrameHeader) Decode(buf []byte) ([]byte, error) {
@@ -191,17 +191,19 @@ func (s *FrameHeader) DecodeExact(buf []byte) error {
 	return nil
 }
 
-type tmp230 struct {
+const FrameHeaderSize = 5
+
+type tmp231 struct {
 	Control Control
 }
 
-func (v *tmp230) isVariant91() {}
+func (v *tmp231) isVariant91() {}
 
-type tmp221 struct {
+type tmp222 struct {
 	Data []uint8
 }
 
-func (v *tmp221) isVariant91() {}
+func (v *tmp222) isVariant91() {}
 
 type Variant91 interface {
 	isVariant91()
@@ -214,24 +216,24 @@ type Frame struct {
 
 func (f *Frame) Control() *Control {
 	if f.Header.Type == FrameType_Control {
-		tmp223, ok := f.tmp167.(*tmp230)
+		tmp224, ok := f.tmp167.(*tmp231)
 		if !ok {
 			return nil
 		}
-		_ = tmp223 // to prevent unused warnings
-		return &tmp223.Control
+		_ = tmp224 // to prevent unused warnings
+		return &tmp224.Control
 	}
 	return nil
 }
-func (f *Frame) SetControl(tmp199 Control) bool {
+func (f *Frame) SetControl(tmp200 Control) bool {
 	if f.Header.Type == FrameType_Control {
-		tmp223, ok := f.tmp167.(*tmp230)
+		tmp224, ok := f.tmp167.(*tmp231)
 		if !ok {
-			tmp223 = &tmp230{}
-			f.tmp167 = tmp223
+			tmp224 = &tmp231{}
+			f.tmp167 = tmp224
 		}
-		_ = tmp223 // to prevent unused warnings
-		tmp223.Control = tmp199
+		_ = tmp224 // to prevent unused warnings
+		tmp224.Control = tmp200
 		return true
 	}
 	return false
@@ -241,50 +243,50 @@ func (f *Frame) Data() *[]uint8 {
 	if f.Header.Type == FrameType_Control {
 		return nil
 	} else {
-		tmp220, ok := f.tmp167.(*tmp221)
+		tmp221, ok := f.tmp167.(*tmp222)
 		if !ok {
 			return nil
 		}
-		_ = tmp220 // to prevent unused warnings
-		return &tmp220.Data
+		_ = tmp221 // to prevent unused warnings
+		return &tmp221.Data
 	}
 	return nil
 }
-func (f *Frame) SetData(tmp196 []uint8) bool {
+func (f *Frame) SetData(tmp197 []uint8) bool {
 	if f.Header.Type == FrameType_Control {
 		return false
 	} else {
-		tmp220, ok := f.tmp167.(*tmp221)
+		tmp221, ok := f.tmp167.(*tmp222)
 		if !ok {
-			tmp220 = &tmp221{}
-			f.tmp167 = tmp220
+			tmp221 = &tmp222{}
+			f.tmp167 = tmp221
 		}
-		_ = tmp220 // to prevent unused warnings
-		if len(tmp196) > int(4294967295) {
+		_ = tmp221 // to prevent unused warnings
+		if len(tmp197) > int(4294967295) {
 			return false
 		}
-		f.Header.Len = uint32(len(tmp196))
-		tmp220.Data = tmp196
+		f.Header.Len = uint32(len(tmp197))
+		tmp221.Data = tmp197
 		return true
 	}
 	return false
 }
 
 func (f *Frame) Write(tmp92 io.Writer) error {
-	tmp227 := f.Header.Write(tmp92)
-	if tmp227 != nil {
-		return tmp227
+	tmp228 := f.Header.Write(tmp92)
+	if tmp228 != nil {
+		return tmp228
 	}
 	if f.Header.Type == FrameType_Control {
-		tmp223, ok := f.tmp167.(*tmp230)
+		tmp224, ok := f.tmp167.(*tmp231)
 		if !ok {
 			return errors.New("invalid union type for encoding")
 		}
-		_ = tmp223 // to prevent unused warnings
+		_ = tmp224 // to prevent unused warnings
 		tmp169 := &bytes.Buffer{}
-		tmp213 := tmp223.Control.Write(tmp169)
-		if tmp213 != nil {
-			return tmp213
+		tmp214 := tmp224.Control.Write(tmp169)
+		if tmp214 != nil {
+			return tmp214
 		}
 		if tmp169.Len() != int(f.Header.Len) {
 			return fmt.Errorf("subrange length mismatch: expected %d, got %d", int(f.Header.Len), tmp169.Len())
@@ -293,15 +295,15 @@ func (f *Frame) Write(tmp92 io.Writer) error {
 			return err
 		}
 	} else {
-		tmp220, ok := f.tmp167.(*tmp221)
+		tmp221, ok := f.tmp167.(*tmp222)
 		if !ok {
 			return errors.New("invalid union type for encoding")
 		}
-		_ = tmp220 // to prevent unused warnings
-		if len(tmp220.Data) != int(int(f.Header.Len)) {
-			return fmt.Errorf("size mismatch when writing field \"Frame::tmp167::Data\": expected %d, got %d", int(int(f.Header.Len)), len(tmp220.Data))
+		_ = tmp221 // to prevent unused warnings
+		if len(tmp221.Data) != int(int(f.Header.Len)) {
+			return fmt.Errorf("size mismatch when writing field \"Frame::tmp167::Data\": expected %d, got %d", int(int(f.Header.Len)), len(tmp221.Data))
 		}
-		if _, err := tmp92.Write(tmp220.Data); err != nil {
+		if _, err := tmp92.Write(tmp221.Data); err != nil {
 			return err
 		}
 	}
@@ -323,43 +325,43 @@ func (s *Frame) MustEncodeCopy(reserved []byte) []byte {
 	return buf
 }
 func (f *Frame) EncodeSlice(tmp92 []byte, tmp92Offset *int) error {
-	tmp227 := f.Header.EncodeSlice(tmp92, tmp92Offset)
-	if tmp227 != nil {
-		return tmp227
+	tmp228 := f.Header.EncodeSlice(tmp92, tmp92Offset)
+	if tmp228 != nil {
+		return tmp228
 	}
 	if f.Header.Type == FrameType_Control {
-		tmp223, ok := f.tmp167.(*tmp230)
+		tmp224, ok := f.tmp167.(*tmp231)
 		if !ok {
 			return errors.New("invalid union type for encoding")
 		}
-		_ = tmp223 // to prevent unused warnings
+		_ = tmp224 // to prevent unused warnings
 		if len(tmp92)-*tmp92Offset < int(f.Header.Len) {
 			return errors.New("not enough space for subrange")
 		}
 		tmp169 := tmp92[*tmp92Offset : *tmp92Offset+int(f.Header.Len)]
 		tmp169OffsetBase := 0
 		tmp169Offset := &tmp169OffsetBase
-		tmp213 := tmp223.Control.EncodeSlice(tmp169, tmp169Offset)
-		if tmp213 != nil {
-			return tmp213
+		tmp214 := tmp224.Control.EncodeSlice(tmp169, tmp169Offset)
+		if tmp214 != nil {
+			return tmp214
 		}
 		if *tmp169Offset != int(f.Header.Len) {
 			return fmt.Errorf("subrange length mismatch: expected %d, got %d", int(f.Header.Len), *tmp169Offset)
 		}
 		*tmp92Offset += int(f.Header.Len)
 	} else {
-		tmp220, ok := f.tmp167.(*tmp221)
+		tmp221, ok := f.tmp167.(*tmp222)
 		if !ok {
 			return errors.New("invalid union type for encoding")
 		}
-		_ = tmp220 // to prevent unused warnings
-		if len(tmp220.Data) != int(int(f.Header.Len)) {
-			return fmt.Errorf("size mismatch when writing field \"Frame::tmp167::Data\": expected %d, got %d", int(int(f.Header.Len)), len(tmp220.Data))
+		_ = tmp221 // to prevent unused warnings
+		if len(tmp221.Data) != int(int(f.Header.Len)) {
+			return fmt.Errorf("size mismatch when writing field \"Frame::tmp167::Data\": expected %d, got %d", int(int(f.Header.Len)), len(tmp221.Data))
 		}
 		if len(tmp92)-*tmp92Offset < int(0+int(f.Header.Len)) {
 			return errors.New("not enough space to write for field \"Frame::tmp167::Data\"")
 		}
-		copy(tmp92[*tmp92Offset:*tmp92Offset+int(int(f.Header.Len))], tmp220.Data)
+		copy(tmp92[*tmp92Offset:*tmp92Offset+int(int(f.Header.Len))], tmp221.Data)
 		*tmp92Offset += int(int(f.Header.Len))
 	}
 	return nil
@@ -380,39 +382,39 @@ func (s *Frame) MustEncode(reserved []byte) []byte {
 	return buf
 }
 func (f *Frame) Append(tmp92 []byte) ([]byte, error) {
-	var tmp227 error
-	tmp92, tmp227 = f.Header.Append(tmp92)
+	var tmp228 error
+	tmp92, tmp228 = f.Header.Append(tmp92)
 
-	if tmp227 != nil {
-		return nil, tmp227
+	if tmp228 != nil {
+		return nil, tmp228
 	}
 	if f.Header.Type == FrameType_Control {
-		tmp223, ok := f.tmp167.(*tmp230)
+		tmp224, ok := f.tmp167.(*tmp231)
 		if !ok {
 			return nil, errors.New("invalid union type for encoding")
 		}
-		_ = tmp223 // to prevent unused warnings
+		_ = tmp224 // to prevent unused warnings
 		tmp169 := tmp92
-		var tmp213 error
-		tmp169, tmp213 = tmp223.Control.Append(tmp169)
+		var tmp214 error
+		tmp169, tmp214 = tmp224.Control.Append(tmp169)
 
-		if tmp213 != nil {
-			return nil, tmp213
+		if tmp214 != nil {
+			return nil, tmp214
 		}
 		if len(tmp169)-len(tmp92) != int(f.Header.Len) {
 			return nil, fmt.Errorf("subrange length mismatch: expected %d, got %d", int(f.Header.Len), len(tmp169)-len(tmp92))
 		}
 		tmp92 = tmp169
 	} else {
-		tmp220, ok := f.tmp167.(*tmp221)
+		tmp221, ok := f.tmp167.(*tmp222)
 		if !ok {
 			return nil, errors.New("invalid union type for encoding")
 		}
-		_ = tmp220 // to prevent unused warnings
-		if len(tmp220.Data) != int(int(f.Header.Len)) {
-			return nil, fmt.Errorf("size mismatch when writing field \"Frame::tmp167::Data\": expected %d, got %d", int(int(f.Header.Len)), len(tmp220.Data))
+		_ = tmp221 // to prevent unused warnings
+		if len(tmp221.Data) != int(int(f.Header.Len)) {
+			return nil, fmt.Errorf("size mismatch when writing field \"Frame::tmp167::Data\": expected %d, got %d", int(int(f.Header.Len)), len(tmp221.Data))
 		}
-		tmp92 = append(tmp92, tmp220.Data...)
+		tmp92 = append(tmp92, tmp221.Data...)
 	}
 	return tmp92, nil
 }
@@ -426,32 +428,32 @@ func (s *Frame) MustAppend(buf []byte) []byte {
 }
 
 func (f *Frame) Read(tmp89 io.Reader) error {
-	tmp209 := f.Header.Read(tmp89)
-	if tmp209 != nil {
-		return tmp209
+	tmp210 := f.Header.Read(tmp89)
+	if tmp210 != nil {
+		return tmp210
 	}
 	if f.Header.Type == FrameType_Control {
-		tmp223, ok := f.tmp167.(*tmp230)
+		tmp224, ok := f.tmp167.(*tmp231)
 		if !ok {
-			tmp223 = &tmp230{}
-			f.tmp167 = tmp223
+			tmp224 = &tmp231{}
+			f.tmp167 = tmp224
 		}
-		_ = tmp223 // to prevent unused warnings
+		_ = tmp224 // to prevent unused warnings
 		tmp164 := io.LimitReader(tmp89, int64(f.Header.Len))
-		tmp203 := tmp223.Control.Read(tmp164)
-		if tmp203 != nil {
-			return tmp203
+		tmp204 := tmp224.Control.Read(tmp164)
+		if tmp204 != nil {
+			return tmp204
 		}
 		if tmp164.(*io.LimitedReader).N != 0 {
 			return fmt.Errorf("subrange length mismatch: expected %d, but remains %d", int(f.Header.Len), tmp164.(*io.LimitedReader).N)
 		}
 	} else {
-		tmp220, ok := f.tmp167.(*tmp221)
+		tmp221, ok := f.tmp167.(*tmp222)
 		if !ok {
-			tmp220 = &tmp221{}
-			f.tmp167 = tmp220
+			tmp221 = &tmp222{}
+			f.tmp167 = tmp221
 		}
-		_ = tmp220 // to prevent unused warnings
+		_ = tmp221 // to prevent unused warnings
 		if seeker, ok := tmp89.(io.Seeker); ok {
 			current, err := seeker.Seek(0, io.SeekCurrent)
 			if err != nil {
@@ -468,18 +470,18 @@ func (f *Frame) Read(tmp89 io.Reader) error {
 			if (endOffset - current) < int64(int(f.Header.Len)) {
 				return fmt.Errorf("Too large length requested: %d < %d", endOffset-current, int64(int(f.Header.Len)))
 			}
-			tmp220.Data = make([]byte, int(f.Header.Len))
-			if _, err := io.ReadFull(tmp89, tmp220.Data[0:0+int(f.Header.Len)]); err != nil {
+			tmp221.Data = make([]byte, int(f.Header.Len))
+			if _, err := io.ReadFull(tmp89, tmp221.Data[0:0+int(f.Header.Len)]); err != nil {
 				return err
 			}
 		} else {
 			// To mitigate DoS attack, use incremental buffer allocation
 			// for more performance, use (assert on DSL or safe-len-limit option) and trust-input-len option
-			io_temp_392 := bytes.NewBuffer(nil)
-			if _, err := io.CopyN(io_temp_392, tmp89, int64(int(f.Header.Len))); err != nil {
+			io_temp_393 := bytes.NewBuffer(nil)
+			if _, err := io.CopyN(io_temp_393, tmp89, int64(int(f.Header.Len))); err != nil {
 				return err
 			}
-			tmp220.Data = io_temp_392.Bytes()
+			tmp221.Data = io_temp_393.Bytes()
 		}
 	}
 	return nil
@@ -503,17 +505,17 @@ func (s *Frame) DecodeExactCopy(buf []byte) error {
 	return nil
 }
 func (f *Frame) DecodeSlice(tmp89 []byte, tmp89Offset *int) error {
-	tmp209 := f.Header.DecodeSlice(tmp89, tmp89Offset)
-	if tmp209 != nil {
-		return tmp209
+	tmp210 := f.Header.DecodeSlice(tmp89, tmp89Offset)
+	if tmp210 != nil {
+		return tmp210
 	}
 	if f.Header.Type == FrameType_Control {
-		tmp223, ok := f.tmp167.(*tmp230)
+		tmp224, ok := f.tmp167.(*tmp231)
 		if !ok {
-			tmp223 = &tmp230{}
-			f.tmp167 = tmp223
+			tmp224 = &tmp231{}
+			f.tmp167 = tmp224
 		}
-		_ = tmp223 // to prevent unused warnings
+		_ = tmp224 // to prevent unused warnings
 		if len(tmp89)-*tmp89Offset < int(f.Header.Len) {
 			return errors.New("not enough data for subrange")
 		}
@@ -521,21 +523,21 @@ func (f *Frame) DecodeSlice(tmp89 []byte, tmp89Offset *int) error {
 		tmp164OffsetBase := 0
 		tmp164Offset := &tmp164OffsetBase
 		*tmp89Offset += int(f.Header.Len)
-		tmp203 := tmp223.Control.DecodeSlice(tmp164, tmp164Offset)
-		if tmp203 != nil {
-			return tmp203
+		tmp204 := tmp224.Control.DecodeSlice(tmp164, tmp164Offset)
+		if tmp204 != nil {
+			return tmp204
 		}
 	} else {
-		tmp220, ok := f.tmp167.(*tmp221)
+		tmp221, ok := f.tmp167.(*tmp222)
 		if !ok {
-			tmp220 = &tmp221{}
-			f.tmp167 = tmp220
+			tmp221 = &tmp222{}
+			f.tmp167 = tmp221
 		}
-		_ = tmp220 // to prevent unused warnings
+		_ = tmp221 // to prevent unused warnings
 		if len(tmp89)-*tmp89Offset < int(f.Header.Len) {
 			return errors.New("not enough data to read for field \"Frame::tmp167::Data\"")
 		}
-		tmp220.Data = tmp89[*tmp89Offset : *tmp89Offset+int(f.Header.Len)]
+		tmp221.Data = tmp89[*tmp89Offset : *tmp89Offset+int(f.Header.Len)]
 		*tmp89Offset += int(int(f.Header.Len))
 	}
 	return nil
@@ -577,11 +579,11 @@ func (e ControlType) String() string {
 	}
 }
 
-type tmp280 struct {
+type tmp281 struct {
 	TerminalWindowSize TerminalWindowSize
 }
 
-func (v *tmp280) isVariant75() {}
+func (v *tmp281) isVariant75() {}
 
 type tmp277 struct {
 	Signal Signal
@@ -589,10 +591,10 @@ type tmp277 struct {
 
 func (v *tmp277) isVariant75() {}
 
-type tmp598 struct {
+type tmp602 struct {
 }
 
-func (v *tmp598) isVariant75() {}
+func (v *tmp602) isVariant75() {}
 
 type Variant75 interface {
 	isVariant75()
@@ -600,14 +602,14 @@ type Variant75 interface {
 
 type Control struct {
 	Type   ControlType
-	tmp181 Variant75
+	tmp180 Variant75
 }
 
 func (c *Control) Signal() *Signal {
 	if c.Type == ControlType_TerminalWindowSize {
 		return nil
 	} else if c.Type == ControlType_Signal {
-		tmp276, ok := c.tmp181.(*tmp277)
+		tmp276, ok := c.tmp180.(*tmp277)
 		if !ok {
 			return nil
 		}
@@ -616,17 +618,17 @@ func (c *Control) Signal() *Signal {
 	}
 	return nil
 }
-func (c *Control) SetSignal(tmp319 Signal) bool {
+func (c *Control) SetSignal(tmp322 Signal) bool {
 	if c.Type == ControlType_TerminalWindowSize {
 		return false
 	} else if c.Type == ControlType_Signal {
-		tmp276, ok := c.tmp181.(*tmp277)
+		tmp276, ok := c.tmp180.(*tmp277)
 		if !ok {
 			tmp276 = &tmp277{}
-			c.tmp181 = tmp276
+			c.tmp180 = tmp276
 		}
 		_ = tmp276 // to prevent unused warnings
-		tmp276.Signal = tmp319
+		tmp276.Signal = tmp322
 		return true
 	}
 	return false
@@ -634,63 +636,63 @@ func (c *Control) SetSignal(tmp319 Signal) bool {
 
 func (c *Control) TerminalWindowSize() *TerminalWindowSize {
 	if c.Type == ControlType_TerminalWindowSize {
-		tmp325, ok := c.tmp181.(*tmp280)
+		tmp323, ok := c.tmp180.(*tmp281)
 		if !ok {
 			return nil
 		}
-		_ = tmp325 // to prevent unused warnings
-		return &tmp325.TerminalWindowSize
+		_ = tmp323 // to prevent unused warnings
+		return &tmp323.TerminalWindowSize
 	}
 	return nil
 }
-func (c *Control) SetTerminalWindowSize(tmp322 TerminalWindowSize) bool {
+func (c *Control) SetTerminalWindowSize(tmp306 TerminalWindowSize) bool {
 	if c.Type == ControlType_TerminalWindowSize {
-		tmp325, ok := c.tmp181.(*tmp280)
+		tmp323, ok := c.tmp180.(*tmp281)
 		if !ok {
-			tmp325 = &tmp280{}
-			c.tmp181 = tmp325
+			tmp323 = &tmp281{}
+			c.tmp180 = tmp323
 		}
-		_ = tmp325 // to prevent unused warnings
-		tmp325.TerminalWindowSize = tmp322
+		_ = tmp323 // to prevent unused warnings
+		tmp323.TerminalWindowSize = tmp306
 		return true
 	}
 	return false
 }
 
-func (c *Control) Write(tmp37 io.Writer) error {
-	tmp37ByteIO, _ := tmp37.(io.ByteWriter)
-	_ = tmp37ByteIO
-	if tmp37ByteIO != nil {
-		if err := tmp37ByteIO.WriteByte(uint8(c.Type)); err != nil {
+func (c *Control) Write(tmp38 io.Writer) error {
+	tmp38ByteIO, _ := tmp38.(io.ByteWriter)
+	_ = tmp38ByteIO
+	if tmp38ByteIO != nil {
+		if err := tmp38ByteIO.WriteByte(uint8(c.Type)); err != nil {
 			return err
 		}
 	} else {
-		if _, err := tmp37.Write([]byte{uint8(c.Type)}); err != nil {
+		if _, err := tmp38.Write([]byte{uint8(c.Type)}); err != nil {
 			return err
 		}
 	}
 	if c.Type == ControlType_TerminalWindowSize {
-		tmp325, ok := c.tmp181.(*tmp280)
+		tmp323, ok := c.tmp180.(*tmp281)
 		if !ok {
 			return errors.New("invalid union type for encoding")
 		}
-		_ = tmp325 // to prevent unused warnings
-		tmp242 := tmp325.TerminalWindowSize.Write(tmp37)
+		_ = tmp323 // to prevent unused warnings
+		tmp242 := tmp323.TerminalWindowSize.Write(tmp38)
 		if tmp242 != nil {
 			return tmp242
 		}
 	} else if c.Type == ControlType_Signal {
-		tmp276, ok := c.tmp181.(*tmp277)
+		tmp276, ok := c.tmp180.(*tmp277)
 		if !ok {
 			return errors.New("invalid union type for encoding")
 		}
 		_ = tmp276 // to prevent unused warnings
-		tmp237 := tmp276.Signal.Write(tmp37)
+		tmp237 := tmp276.Signal.Write(tmp38)
 		if tmp237 != nil {
 			return tmp237
 		}
 	} else {
-		tmp275, ok := c.tmp181.(*tmp598)
+		tmp275, ok := c.tmp180.(*tmp602)
 		if !ok {
 			return errors.New("invalid union type for encoding")
 		}
@@ -714,36 +716,36 @@ func (s *Control) MustEncodeCopy(reserved []byte) []byte {
 	}
 	return buf
 }
-func (c *Control) EncodeSlice(tmp37 []byte, tmp37Offset *int) error {
+func (c *Control) EncodeSlice(tmp38 []byte, tmp38Offset *int) error {
 	tmp248 := []uint8{}
-	if len(tmp37)-*tmp37Offset < int(1) {
+	if len(tmp38)-*tmp38Offset < int(1) {
 		return errors.New("not enough space to reserve data for field \"Control::Type\"")
 	}
-	tmp248 = tmp37[*tmp37Offset : *tmp37Offset+int(1)]
+	tmp248 = tmp38[*tmp38Offset : *tmp38Offset+int(1)]
 	tmp248[0] = uint8(c.Type)
-	*tmp37Offset += int(1)
+	*tmp38Offset += int(1)
 	if c.Type == ControlType_TerminalWindowSize {
-		tmp325, ok := c.tmp181.(*tmp280)
+		tmp323, ok := c.tmp180.(*tmp281)
 		if !ok {
 			return errors.New("invalid union type for encoding")
 		}
-		_ = tmp325 // to prevent unused warnings
-		tmp242 := tmp325.TerminalWindowSize.EncodeSlice(tmp37, tmp37Offset)
+		_ = tmp323 // to prevent unused warnings
+		tmp242 := tmp323.TerminalWindowSize.EncodeSlice(tmp38, tmp38Offset)
 		if tmp242 != nil {
 			return tmp242
 		}
 	} else if c.Type == ControlType_Signal {
-		tmp276, ok := c.tmp181.(*tmp277)
+		tmp276, ok := c.tmp180.(*tmp277)
 		if !ok {
 			return errors.New("invalid union type for encoding")
 		}
 		_ = tmp276 // to prevent unused warnings
-		tmp237 := tmp276.Signal.EncodeSlice(tmp37, tmp37Offset)
+		tmp237 := tmp276.Signal.EncodeSlice(tmp38, tmp38Offset)
 		if tmp237 != nil {
 			return tmp237
 		}
 	} else {
-		tmp275, ok := c.tmp181.(*tmp598)
+		tmp275, ok := c.tmp180.(*tmp602)
 		if !ok {
 			return errors.New("invalid union type for encoding")
 		}
@@ -767,43 +769,43 @@ func (s *Control) MustEncode(reserved []byte) []byte {
 	}
 	return buf
 }
-func (c *Control) Append(tmp37 []byte) ([]byte, error) {
+func (c *Control) Append(tmp38 []byte) ([]byte, error) {
 	tmp248 := [1]uint8{}
 	tmp248[0] = uint8(c.Type)
-	tmp37 = append(tmp37, tmp248[:1]...)
+	tmp38 = append(tmp38, tmp248[:1]...)
 	if c.Type == ControlType_TerminalWindowSize {
-		tmp325, ok := c.tmp181.(*tmp280)
+		tmp323, ok := c.tmp180.(*tmp281)
 		if !ok {
 			return nil, errors.New("invalid union type for encoding")
 		}
-		_ = tmp325 // to prevent unused warnings
+		_ = tmp323 // to prevent unused warnings
 		var tmp242 error
-		tmp37, tmp242 = tmp325.TerminalWindowSize.Append(tmp37)
+		tmp38, tmp242 = tmp323.TerminalWindowSize.Append(tmp38)
 
 		if tmp242 != nil {
 			return nil, tmp242
 		}
 	} else if c.Type == ControlType_Signal {
-		tmp276, ok := c.tmp181.(*tmp277)
+		tmp276, ok := c.tmp180.(*tmp277)
 		if !ok {
 			return nil, errors.New("invalid union type for encoding")
 		}
 		_ = tmp276 // to prevent unused warnings
 		var tmp237 error
-		tmp37, tmp237 = tmp276.Signal.Append(tmp37)
+		tmp38, tmp237 = tmp276.Signal.Append(tmp38)
 
 		if tmp237 != nil {
 			return nil, tmp237
 		}
 	} else {
-		tmp275, ok := c.tmp181.(*tmp598)
+		tmp275, ok := c.tmp180.(*tmp602)
 		if !ok {
 			return nil, errors.New("invalid union type for encoding")
 		}
 		_ = tmp275 // to prevent unused warnings
 		return nil, errors.New("Unexpected error")
 	}
-	return tmp37, nil
+	return tmp38, nil
 }
 func (s *Control) MustAppend(buf []byte) []byte {
 	var err error
@@ -814,13 +816,13 @@ func (s *Control) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (c *Control) Read(tmp40 io.Reader) error {
-	tmp40ByteIO, _ := tmp40.(io.ByteReader)
-	_ = tmp40ByteIO
+func (c *Control) Read(tmp41 io.Reader) error {
+	tmp41ByteIO, _ := tmp41.(io.ByteReader)
+	_ = tmp41ByteIO
 	tmp270 := uint8(0)
-	if tmp40ByteIO != nil {
+	if tmp41ByteIO != nil {
 		var err error
-		tmp270, err = tmp40ByteIO.ReadByte()
+		tmp270, err = tmp41ByteIO.ReadByte()
 		if err != nil {
 			return err
 		}
@@ -828,7 +830,7 @@ func (c *Control) Read(tmp40 io.Reader) error {
 		var err error
 		var n int
 		buf := [1]byte{0}
-		if n, err = io.ReadFull(tmp40, buf[:]); err != nil {
+		if n, err = io.ReadFull(tmp41, buf[:]); err != nil {
 			return err
 		}
 		if n != 1 {
@@ -838,32 +840,32 @@ func (c *Control) Read(tmp40 io.Reader) error {
 	}
 	c.Type = ControlType(tmp270)
 	if c.Type == ControlType_TerminalWindowSize {
-		tmp325, ok := c.tmp181.(*tmp280)
+		tmp323, ok := c.tmp180.(*tmp281)
 		if !ok {
-			tmp325 = &tmp280{}
-			c.tmp181 = tmp325
+			tmp323 = &tmp281{}
+			c.tmp180 = tmp323
 		}
-		_ = tmp325 // to prevent unused warnings
-		tmp262 := tmp325.TerminalWindowSize.Read(tmp40)
+		_ = tmp323 // to prevent unused warnings
+		tmp262 := tmp323.TerminalWindowSize.Read(tmp41)
 		if tmp262 != nil {
 			return tmp262
 		}
 	} else if c.Type == ControlType_Signal {
-		tmp276, ok := c.tmp181.(*tmp277)
+		tmp276, ok := c.tmp180.(*tmp277)
 		if !ok {
 			tmp276 = &tmp277{}
-			c.tmp181 = tmp276
+			c.tmp180 = tmp276
 		}
 		_ = tmp276 // to prevent unused warnings
-		tmp256 := tmp276.Signal.Read(tmp40)
+		tmp256 := tmp276.Signal.Read(tmp41)
 		if tmp256 != nil {
 			return tmp256
 		}
 	} else {
-		tmp275, ok := c.tmp181.(*tmp598)
+		tmp275, ok := c.tmp180.(*tmp602)
 		if !ok {
-			tmp275 = &tmp598{}
-			c.tmp181 = tmp275
+			tmp275 = &tmp602{}
+			c.tmp180 = tmp275
 		}
 		_ = tmp275 // to prevent unused warnings
 		return errors.New("Unexpected error")
@@ -888,43 +890,43 @@ func (s *Control) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (c *Control) DecodeSlice(tmp40 []byte, tmp40Offset *int) error {
+func (c *Control) DecodeSlice(tmp41 []byte, tmp41Offset *int) error {
 	tmp270 := uint8(0)
 	tmp269 := []uint8{}
-	if len(tmp40)-*tmp40Offset < 1 {
+	if len(tmp41)-*tmp41Offset < 1 {
 		return errors.New("not enough data to read for field \"Control::Type\"")
 	}
-	tmp269 = tmp40[*tmp40Offset : *tmp40Offset+1]
-	*tmp40Offset += int(1)
+	tmp269 = tmp41[*tmp41Offset : *tmp41Offset+1]
+	*tmp41Offset += int(1)
 	tmp270 = tmp269[0]
 	c.Type = ControlType(tmp270)
 	if c.Type == ControlType_TerminalWindowSize {
-		tmp325, ok := c.tmp181.(*tmp280)
+		tmp323, ok := c.tmp180.(*tmp281)
 		if !ok {
-			tmp325 = &tmp280{}
-			c.tmp181 = tmp325
+			tmp323 = &tmp281{}
+			c.tmp180 = tmp323
 		}
-		_ = tmp325 // to prevent unused warnings
-		tmp262 := tmp325.TerminalWindowSize.DecodeSlice(tmp40, tmp40Offset)
+		_ = tmp323 // to prevent unused warnings
+		tmp262 := tmp323.TerminalWindowSize.DecodeSlice(tmp41, tmp41Offset)
 		if tmp262 != nil {
 			return tmp262
 		}
 	} else if c.Type == ControlType_Signal {
-		tmp276, ok := c.tmp181.(*tmp277)
+		tmp276, ok := c.tmp180.(*tmp277)
 		if !ok {
 			tmp276 = &tmp277{}
-			c.tmp181 = tmp276
+			c.tmp180 = tmp276
 		}
 		_ = tmp276 // to prevent unused warnings
-		tmp256 := tmp276.Signal.DecodeSlice(tmp40, tmp40Offset)
+		tmp256 := tmp276.Signal.DecodeSlice(tmp41, tmp41Offset)
 		if tmp256 != nil {
 			return tmp256
 		}
 	} else {
-		tmp275, ok := c.tmp181.(*tmp598)
+		tmp275, ok := c.tmp180.(*tmp602)
 		if !ok {
-			tmp275 = &tmp598{}
-			c.tmp181 = tmp275
+			tmp275 = &tmp602{}
+			c.tmp180 = tmp275
 		}
 		_ = tmp275 // to prevent unused warnings
 		return errors.New("Unexpected error")
@@ -963,19 +965,19 @@ func (t *TerminalWindowSize) Write(tmp23 io.Writer) error {
 	if _, err := tmp23.Write(tmp97[:2]); err != nil {
 		return err
 	}
-	tmp286 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp286[:], uint16(t.Rows))
-	if _, err := tmp23.Write(tmp286[:2]); err != nil {
+	tmp287 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp287[:], uint16(t.Rows))
+	if _, err := tmp23.Write(tmp287[:2]); err != nil {
 		return err
 	}
-	tmp284 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp284[:], uint16(t.Width))
-	if _, err := tmp23.Write(tmp284[:2]); err != nil {
+	tmp285 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp285[:], uint16(t.Width))
+	if _, err := tmp23.Write(tmp285[:2]); err != nil {
 		return err
 	}
-	tmp282 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp282[:], uint16(t.Height))
-	if _, err := tmp23.Write(tmp282[:2]); err != nil {
+	tmp283 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp283[:], uint16(t.Height))
+	if _, err := tmp23.Write(tmp283[:2]); err != nil {
 		return err
 	}
 	return nil
@@ -1003,26 +1005,26 @@ func (t *TerminalWindowSize) EncodeSlice(tmp23 []byte, tmp23Offset *int) error {
 	tmp97 = tmp23[*tmp23Offset : *tmp23Offset+int(2)]
 	binary.BigEndian.PutUint16(tmp97[:], uint16(t.Columns))
 	*tmp23Offset += int(2)
-	tmp286 := []uint8{}
+	tmp287 := []uint8{}
 	if len(tmp23)-*tmp23Offset < int(2) {
 		return errors.New("not enough space to reserve data for field \"TerminalWindowSize::Rows\"")
 	}
-	tmp286 = tmp23[*tmp23Offset : *tmp23Offset+int(2)]
-	binary.BigEndian.PutUint16(tmp286[:], uint16(t.Rows))
+	tmp287 = tmp23[*tmp23Offset : *tmp23Offset+int(2)]
+	binary.BigEndian.PutUint16(tmp287[:], uint16(t.Rows))
 	*tmp23Offset += int(2)
-	tmp284 := []uint8{}
+	tmp285 := []uint8{}
 	if len(tmp23)-*tmp23Offset < int(2) {
 		return errors.New("not enough space to reserve data for field \"TerminalWindowSize::Width\"")
 	}
-	tmp284 = tmp23[*tmp23Offset : *tmp23Offset+int(2)]
-	binary.BigEndian.PutUint16(tmp284[:], uint16(t.Width))
+	tmp285 = tmp23[*tmp23Offset : *tmp23Offset+int(2)]
+	binary.BigEndian.PutUint16(tmp285[:], uint16(t.Width))
 	*tmp23Offset += int(2)
-	tmp282 := []uint8{}
+	tmp283 := []uint8{}
 	if len(tmp23)-*tmp23Offset < int(2) {
 		return errors.New("not enough space to reserve data for field \"TerminalWindowSize::Height\"")
 	}
-	tmp282 = tmp23[*tmp23Offset : *tmp23Offset+int(2)]
-	binary.BigEndian.PutUint16(tmp282[:], uint16(t.Height))
+	tmp283 = tmp23[*tmp23Offset : *tmp23Offset+int(2)]
+	binary.BigEndian.PutUint16(tmp283[:], uint16(t.Height))
 	*tmp23Offset += int(2)
 	return nil
 }
@@ -1045,15 +1047,15 @@ func (t *TerminalWindowSize) Append(tmp23 []byte) ([]byte, error) {
 	tmp97 := [2]uint8{}
 	binary.BigEndian.PutUint16(tmp97[:], uint16(t.Columns))
 	tmp23 = append(tmp23, tmp97[:2]...)
-	tmp286 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp286[:], uint16(t.Rows))
-	tmp23 = append(tmp23, tmp286[:2]...)
-	tmp284 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp284[:], uint16(t.Width))
-	tmp23 = append(tmp23, tmp284[:2]...)
-	tmp282 := [2]uint8{}
-	binary.BigEndian.PutUint16(tmp282[:], uint16(t.Height))
-	tmp23 = append(tmp23, tmp282[:2]...)
+	tmp287 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp287[:], uint16(t.Rows))
+	tmp23 = append(tmp23, tmp287[:2]...)
+	tmp285 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp285[:], uint16(t.Width))
+	tmp23 = append(tmp23, tmp285[:2]...)
+	tmp283 := [2]uint8{}
+	binary.BigEndian.PutUint16(tmp283[:], uint16(t.Height))
+	tmp23 = append(tmp23, tmp283[:2]...)
 	return tmp23, nil
 }
 func (s *TerminalWindowSize) MustAppend(buf []byte) []byte {
@@ -1223,9 +1225,9 @@ func (s *Signal) MustAppend(buf []byte) []byte {
 	return buf
 }
 
-func (s *Signal) Read(tmp147 io.Reader) error {
+func (s *Signal) Read(tmp137 io.Reader) error {
 	tmp301 := [4]uint8{}
-	if _, err := io.ReadFull(tmp147, tmp301[0:0+4]); err != nil {
+	if _, err := io.ReadFull(tmp137, tmp301[0:0+4]); err != nil {
 		return err
 	}
 	s.Signal = int32(binary.BigEndian.Uint32(tmp301[:]))
@@ -1249,13 +1251,13 @@ func (s *Signal) DecodeExactCopy(buf []byte) error {
 	}
 	return nil
 }
-func (s *Signal) DecodeSlice(tmp147 []byte, tmp147Offset *int) error {
+func (s *Signal) DecodeSlice(tmp137 []byte, tmp137Offset *int) error {
 	tmp301 := []uint8{}
-	if len(tmp147)-*tmp147Offset < 4 {
+	if len(tmp137)-*tmp137Offset < 4 {
 		return errors.New("not enough data to read for field \"Signal::Signal\"")
 	}
-	tmp301 = tmp147[*tmp147Offset : *tmp147Offset+4]
-	*tmp147Offset += int(4)
+	tmp301 = tmp137[*tmp137Offset : *tmp137Offset+4]
+	*tmp137Offset += int(4)
 	s.Signal = int32(binary.BigEndian.Uint32(tmp301[:]))
 	return nil
 }

@@ -14,6 +14,10 @@ format FrameHeader:
     type :FrameType
     len :u32
 
+# FrameHeader is fixed-size. Its byte length is exposed so a reader that only
+# needs a frame's boundary takes it from the schema instead of restating it.
+FrameHeaderSize ::= sizeof(FrameHeader)
+
 format Frame:
     header :FrameHeader
     match header.type:
