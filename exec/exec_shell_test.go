@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/on-keyday/objtrsf/exec/frame"
 	"github.com/on-keyday/objtrsf/trsf"
 )
 
@@ -306,5 +307,43 @@ func TestPumpTerminalIO_SwallowIsBounded(t *testing.T) {
 	}
 	if got := stream.forwarded(); len(got) != 0 {
 		t.Fatalf("forwarded = %q, want nothing — a swallowed keystroke must not reach the runner", got)
+	}
+}
+
+// endFrame is the far side's End control frame.
+func endFrame(exit int32, reason string) []byte {
+	ctrl := frame.Control{Type: frame.ControlType_End}
+	end := frame.End{ExitCode: exit}
+	end.SetReason([]byte(reason))
+	ctrl.SetEnd(end)
+	enc := ctrl.MustAppend(nil)
+	hdr := frame.FrameHeader{Type: frame.FrameType_Control, Len: uint32(len(enc))}
+	return append(hdr.MustAppend(nil), enc...)
+}
+
+// A far side that ends the session says why in an End frame before closing;
+// the caller reads it after the session returns. Nothing reaches the
+// terminal: it is not output.
+func TestPumpTerminalIO_EndFrameCarriesTheReason(t *testing.T) {
+	stream := newRecordingBidiStream()
+	ces := NewCommandExecutionStream(stream)
+	var out bytes.Buffer
+	done := runPump(t, ces, newScriptedReader(), &out)
+	if _, err := stream.w.Write(endFrame(-1, "prompt_unsupported: no {prompt}")); err != nil {
+		t.Fatal(err)
+	}
+	stream.SignalEOF()
+	if err := awaitPump(t, done, 2*time.Second); err != nil {
+		t.Fatalf("PumpTerminalIO = %v", err)
+	}
+	reason, exit, ok := ces.EndReason()
+	if !ok || reason != "prompt_unsupported: no {prompt}" || exit != -1 {
+		t.Fatalf("EndReason = %q %d %v", reason, exit, ok)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("the End frame reached the terminal: %q", out.String())
+	}
+	if ces.DetachedByKey() {
+		t.Fatal("an End is not a detach")
 	}
 }

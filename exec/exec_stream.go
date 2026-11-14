@@ -24,6 +24,19 @@ type CommandExecutionStream struct {
 	// detachedByKey is set when PumpTerminalIO ends because the local detach
 	// key was pressed; see DetachedByKey.
 	detachedByKey atomic.Bool
+	// end is the far side's End frame, when one arrived; see EndReason.
+	end atomic.Pointer[frame.End]
+}
+
+// EndReason returns why the far side ended the session, from the End frame it
+// sends before closing the stream (e.g. a runner refusing to start it). ok is
+// false when none arrived — a far side that just closed, or a detach.
+func (w *CommandExecutionStream) EndReason() (reason string, exitCode int32, ok bool) {
+	e := w.end.Load()
+	if e == nil {
+		return "", 0, false
+	}
+	return string(e.Reason), e.ExitCode, true
 }
 
 // DetachedByKey reports whether PumpTerminalIO (and so RemoteShell) ended
@@ -106,6 +119,12 @@ func NewCommandExecutionStream(stream trsf.BidirectionalStream) *CommandExecutio
 				if ctrl := hdr.Control(); ctrl != nil && ctrl.Type == frame.ControlType_TerminalWindowSize {
 					if ws := ctrl.TerminalWindowSize(); ws != nil {
 						w.winSize.Store(uint32(ws.Rows)<<16 | uint32(ws.Columns))
+					}
+				} else if ctrl != nil && ctrl.Type == frame.ControlType_End {
+					if e := ctrl.End(); e != nil {
+						kept := *e
+						kept.Reason = append([]byte(nil), e.Reason...)
+						w.end.Store(&kept)
 					}
 				}
 			default:

@@ -28,6 +28,7 @@ enum ControlType:
     :u8
     terminal_window_size
     signal
+    end
 
 
 format Control:
@@ -35,6 +36,7 @@ format Control:
     match type:
         ControlType.terminal_window_size => terminal_window_size :TerminalWindowSize
         ControlType.signal => signal :Signal
+        ControlType.end => end :End
         .. => error("Unexpected error")
 
 format TerminalWindowSize:
@@ -45,3 +47,12 @@ format TerminalWindowSize:
 
 format Signal:
     signal :i32
+
+# End is the far side's last frame before it closes the stream: why the
+# session is ending, so a client can say so instead of seeing the stream just
+# close (e.g. a runner refusing to start the session). It is not output and is
+# never written to a terminal. exit_code is the process's, or -1 when none ran.
+format End:
+    exit_code :i32
+    reason_len :u16
+    reason :[reason_len]u8
