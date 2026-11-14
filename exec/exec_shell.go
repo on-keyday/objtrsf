@@ -139,6 +139,7 @@ func (w *CommandExecutionStream) PumpTerminalIO(in io.Reader, out io.Writer) err
 					// any trailing bytes after `end` are also dropped — in
 					// practice human input doesn't queue anything after a
 					// dedicated detach keystroke.
+					w.detachedByKey.Store(true)
 					_ = w.BidirectionalStream.Close()
 					stdinExit <- nil
 					return

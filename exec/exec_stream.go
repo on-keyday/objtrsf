@@ -21,6 +21,18 @@ type CommandExecutionStream struct {
 	// grid dimensions; the server replays the controlling client's last size as
 	// a control frame ahead of the ring (see server.SessionMux.AttachViewer).
 	winSize atomic.Uint32
+	// detachedByKey is set when PumpTerminalIO ends because the local detach
+	// key was pressed; see DetachedByKey.
+	detachedByKey atomic.Bool
+}
+
+// DetachedByKey reports whether PumpTerminalIO (and so RemoteShell) ended
+// because the user pressed the detach key, rather than because the far side
+// closed the stream or the local input failed. A nil return from either means
+// both "detached" and "the session ended", and only the far-side case has an
+// end worth reporting — the caller asks this to tell them apart.
+func (w *CommandExecutionStream) DetachedByKey() bool {
+	return w.detachedByKey.Load()
 }
 
 // LastWindowSize returns the most recent terminal window size observed on the

@@ -163,6 +163,9 @@ func TestPumpTerminalIO_RemoteEndEndsSession(t *testing.T) {
 	if out.String() != "hi" {
 		t.Fatalf("out = %q, want %q", out.String(), "hi")
 	}
+	if ces.DetachedByKey() {
+		t.Fatal("DetachedByKey after the remote ended the session, want false")
+	}
 }
 
 // The regression this file exists for: when the input pump dies while the
@@ -232,6 +235,9 @@ func TestPumpTerminalIO_DetachEndsWhenPeerCloses(t *testing.T) {
 	}
 	if got := stream.forwarded(); bytes.Contains(got, []byte{0x1d}) {
 		t.Fatalf("forwarded = %q, want the detach key itself consumed", got)
+	}
+	if !ces.DetachedByKey() {
+		t.Fatal("DetachedByKey after the detach key, want true")
 	}
 }
 
