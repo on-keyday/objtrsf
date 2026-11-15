@@ -78,12 +78,34 @@ func WebSocketEndpointEx(rawSess objproto.RawEndpoint, mux *http.ServeMux, cfg W
 					slog.String("err", err.Error()))
 				rawSess.CannotSend(pkt)
 				connsMu.Lock()
-				delete(conns, pkt.To.Addr)
+				if conns[pkt.To.Addr] == conn {
+					delete(conns, pkt.To.Addr)
+				}
 				connsMu.Unlock()
 				conn.close()
 			}
 		}
 	}()
+
+	// The browser does not report a half-open socket: after sleep it stays
+	// OPEN, and close() on it may not fire "close" for minutes. So the entry
+	// goes and the socket is closed here, synchronously, and the next
+	// handshake dials anew.
+	registerUnderlayCloser(rawSess, func(want netip.AddrPort) bool {
+		connsMu.Lock()
+		var taken []*wasmWSConn
+		for a, c := range conns {
+			if unmapped(a) == want {
+				taken = append(taken, c)
+				delete(conns, a)
+			}
+		}
+		connsMu.Unlock()
+		for _, c := range taken {
+			c.close()
+		}
+		return len(taken) > 0
+	})
 
 	return nil
 }
@@ -206,14 +228,22 @@ func dialAndSend(
 			case data := <-conn.incoming:
 				rawSess.Receive(scheme, conn.remoteAddr, data)
 			case <-conn.closed:
+				// An entry already gone was dropped by CloseUnderlayAt, which
+				// closed its connections itself; the address may carry a fresh
+				// socket by now, and its connections must not be closed here.
 				connsMu.Lock()
-				delete(conns, conn.remoteAddr)
+				owned := conns[conn.remoteAddr] == conn
+				if owned {
+					delete(conns, conn.remoteAddr)
+				}
 				connsMu.Unlock()
 				conn.close()
 				// Same reason as the native loop: dropping our own entry only
 				// makes the next outbound packet fail into CannotSend, and a
 				// browser whose server died has nothing to send.
-				CloseConnectionsAt(rawSess, conn.remoteAddr, logger)
+				if owned {
+					CloseConnectionsAt(rawSess, conn.remoteAddr, logger)
+				}
 				return
 			}
 		}

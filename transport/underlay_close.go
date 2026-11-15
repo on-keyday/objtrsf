@@ -3,6 +3,7 @@ package transport
 import (
 	"log/slog"
 	"net/netip"
+	"sync"
 
 	"github.com/on-keyday/objtrsf/objproto"
 )
@@ -48,4 +49,60 @@ func CloseConnectionsAt(ep objproto.Endpoint, addr netip.AddrPort, logger *slog.
 		}
 		_ = conn.Close()
 	}
+}
+
+// CloseUnderlayAt drops the socket ep's transports hold to addr and closes the
+// connections that rode it. It reports whether any socket was found.
+//
+// This is for a caller that has learned a link is dead from something the
+// transport cannot see — an application-level probe that went unanswered. A
+// browser after sleep keeps a half-open WebSocket in readyState OPEN with no
+// close event for minutes; closing the objproto connection alone does not help
+// there, because the next handshake to the same address rides the socket still
+// in the transport's map, i.e. the dead one. After this call the next handshake
+// dials a fresh socket.
+//
+// A new handshake does NOT replace an existing socket on its own: a Mutual-mode
+// endpoint accepts a peer's handshake at a new connection id over the socket it
+// already has, so "dead" has to be said by the caller.
+//
+// Only transports that hold a socket per peer register here (WebSocket). For
+// any other endpoint, and for an address with no socket, this returns false and
+// does nothing; UDP has no per-peer socket to drop.
+func CloseUnderlayAt(ep objproto.Endpoint, addr netip.AddrPort, logger *slog.Logger) bool {
+	want := netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port())
+	underlayClosersMu.Lock()
+	closers := append([]func(netip.AddrPort) bool(nil), underlayClosers[ep]...)
+	underlayClosersMu.Unlock()
+	found := false
+	for _, f := range closers {
+		if f(want) {
+			found = true
+		}
+	}
+	if found {
+		if logger != nil {
+			logger.Info("dropped the underlay socket on request", "addr", want.String())
+		}
+		CloseConnectionsAt(ep, want, logger)
+	}
+	return found
+}
+
+// underlayClosers holds, per endpoint, each socket transport's function that
+// drops its socket to an (unmapped) address and reports whether it had one.
+// Endpoints are never closed, so neither are their entries.
+var (
+	underlayClosersMu sync.Mutex
+	underlayClosers   = map[objproto.Endpoint][]func(netip.AddrPort) bool{}
+)
+
+func registerUnderlayCloser(ep objproto.Endpoint, f func(netip.AddrPort) bool) {
+	underlayClosersMu.Lock()
+	defer underlayClosersMu.Unlock()
+	underlayClosers[ep] = append(underlayClosers[ep], f)
+}
+
+func unmapped(a netip.AddrPort) netip.AddrPort {
+	return netip.AddrPortFrom(a.Addr().Unmap(), a.Port())
 }

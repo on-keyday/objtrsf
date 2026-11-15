@@ -91,6 +91,33 @@ func (m *connectionMap) Delete(addr netip.AddrPort) {
 	delete(m.connMap, addr)
 }
 
+// deleteIf removes addr's entry only while it is still conn, and reports
+// whether it did. A socket's teardown uses it so that a replacement dialed in
+// the meantime keeps its entry.
+func (m *connectionMap) deleteIf(addr netip.AddrPort, conn *WebSocketConn) bool {
+	m.connMapLock.Lock()
+	defer m.connMapLock.Unlock()
+	if m.connMap[addr] != conn {
+		return false
+	}
+	delete(m.connMap, addr)
+	return true
+}
+
+// takeAt removes and returns every entry whose (unmapped) address is want.
+func (m *connectionMap) takeAt(want netip.AddrPort) []*WebSocketConn {
+	m.connMapLock.Lock()
+	defer m.connMapLock.Unlock()
+	var out []*WebSocketConn
+	for a, c := range m.connMap {
+		if unmapped(a) == want {
+			out = append(out, c)
+			delete(m.connMap, a)
+		}
+	}
+	return out
+}
+
 // startTransportLoops runs two goroutines on top of rawSess:
 //   - recv: pumps frames from each accepted/dialed *WebSocketConn into rawSess.Receive
 //   - send: drains rawSess.GetSenderChannel and writes to the mapped conn,
@@ -113,7 +140,11 @@ func startTransportLoops(rawSess objproto.RawEndpoint,
 				for {
 					recv, err := c.Receive()
 					if err != nil {
-						connMap.Delete(c.remoteAddr)
+						// An entry already gone was dropped by CloseUnderlayAt,
+						// which closed its connections itself; the address may
+						// carry a fresh socket by now, and its connections must
+						// not be closed from here.
+						owned := connMap.deleteIf(c.remoteAddr, c)
 						if errors.Is(err, io.EOF) {
 							logger.Info("websocket connection closed by remote", slog.String("address", c.remoteAddr.String()))
 						} else {
@@ -123,7 +154,9 @@ func startTransportLoops(rawSess objproto.RawEndpoint,
 						// NEXT outbound packet fail into CannotSend, and nothing is
 						// sent to a peer that has gone quiet — so without this the
 						// connection sat until the garbage collector's timeout.
-						CloseConnectionsAt(rawSess, c.remoteAddr, logger)
+						if owned {
+							CloseConnectionsAt(rawSess, c.remoteAddr, logger)
+						}
 						return
 					}
 					rawSess.Receive(c.transport, c.remoteAddr, recv)
@@ -310,5 +343,12 @@ func WebSocketEndpointEx(rawSess objproto.RawEndpoint, mux *http.ServeMux, cfg W
 	}
 	startTransportLoops(rawSess, connChan, connMap,
 		sendTo, cfg.TLS, dialPath, cfg.Logger)
+	registerUnderlayCloser(rawSess, func(addr netip.AddrPort) bool {
+		taken := connMap.takeAt(addr)
+		for _, c := range taken {
+			_ = c.Close()
+		}
+		return len(taken) > 0
+	})
 	return nil
 }
