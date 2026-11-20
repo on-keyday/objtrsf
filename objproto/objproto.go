@@ -78,6 +78,11 @@ func (c ConnectionID) String() string {
 			return fmt.Sprintf("%s:%d:%d-%d", c.Transport, cid, port, c.ID)
 		}
 	}
+	if isNamedTransport(c.Transport) {
+		if key, ok := NamedFromAddrPort(c.Addr); ok {
+			return fmt.Sprintf("%s:@%x-%d", c.Transport, key[:], c.ID)
+		}
+	}
 	return fmt.Sprintf("%s:%s-%d", c.Transport, c.Addr.String(), c.ID)
 }
 
@@ -110,6 +115,11 @@ func ParseConnectionID(s string, opt ParseOption) (ConnectionID, error) {
 	var err error
 	if transport == TransportVsock {
 		addr, err = parseVsockAddr(addrStr)
+		if err != nil {
+			return ConnectionID{}, err
+		}
+	} else if strings.HasPrefix(addrStr, "@") {
+		addr, err = parseNamedAddr(transport, addrStr)
 		if err != nil {
 			return ConnectionID{}, err
 		}
