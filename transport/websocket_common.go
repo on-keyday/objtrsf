@@ -27,12 +27,20 @@ import (
 // Mode selects Client / Server / Mutual semantics. The mux argument of
 // WebSocketEndpoint must be nil for Client and non-nil for Server / Mutual.
 //
+// Targets resolves named addresses (objproto.NamedAddrPort) to the URL a
+// dial sends: a ws/wss handshake to a named address is dialed at the
+// registered URL, so the front sees its host name in SNI and Host and its
+// path. A named address with no entry, or with Targets nil, cannot be sent
+// to. The caller keeps the table and registers targets at run time. The wasm
+// build ignores Targets.
+//
 // This file (websocket_common.go) is build-constraint-free so the struct is
 // shared between native (websocket.go, !js) and wasm (websocket_wasm.go, js)
 // implementations.
 type WebSocketConfig struct {
-	Logger *slog.Logger
-	Path   string
-	TLS    *tls.Config
-	Mode   objproto.EndpointMode
+	Logger  *slog.Logger
+	Path    string
+	TLS     *tls.Config
+	Mode    objproto.EndpointMode
+	Targets *WebSocketTargets
 }
