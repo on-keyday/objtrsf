@@ -75,3 +75,20 @@ func TestNamedConnectionIDTextRejects(t *testing.T) {
 		t.Errorf("ParseConnectionID(vsock:3:5-7) = %v, %v; want %v", back, err, v)
 	}
 }
+
+func TestConnectionIDIsNamed(t *testing.T) {
+	for _, c := range []struct {
+		cid  ConnectionID
+		want bool
+	}{
+		{NewConnectionID("wss", NamedAddrPort(testNamedKey), 1), true},
+		{NewConnectionID("ws", NamedAddrPort(testNamedKey), 1), true},
+		{NewConnectionID(TransportVsock, VsockAddrPort(3, 5), 1), false},
+		{NewConnectionID("udp", NamedAddrPort(testNamedKey), 1), false},
+		{NewConnectionID("wss", netip.MustParseAddrPort("1.2.3.4:443"), 1), false},
+	} {
+		if got := c.cid.IsNamed(); got != c.want {
+			t.Errorf("%v.IsNamed() = %v, want %v", c.cid, got, c.want)
+		}
+	}
+}

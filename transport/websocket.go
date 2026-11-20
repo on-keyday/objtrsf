@@ -210,7 +210,7 @@ func startTransportLoops(rawSess objproto.RawEndpoint,
 								rawSess.CannotSend(pkt)
 								return
 							}
-							location = t.URL()
+							location = dialLocation(t)
 						}
 						conf := &websocket.Config{
 							Location: location,

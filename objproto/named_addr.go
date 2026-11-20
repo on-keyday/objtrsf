@@ -40,6 +40,18 @@ func NamedFromAddrPort(ap netip.AddrPort) (key [8]byte, ok bool) {
 	return [8]byte(b[8:]), true
 }
 
+// IsNamed reports whether c is a named address: ws or wss, with an address
+// NamedAddrPort produced. Such a ConnectionID is a key into the table of the
+// leg that registered it, so nothing but that process can dial it; anything
+// that takes an address to dial from text should refuse one.
+func (c ConnectionID) IsNamed() bool {
+	if !isNamedTransport(c.Transport) {
+		return false
+	}
+	_, ok := NamedFromAddrPort(c.Addr)
+	return ok
+}
+
 // isNamedTransport reports whether transport can carry a named address.
 func isNamedTransport(transport string) bool {
 	return transport == "ws" || transport == "wss"

@@ -127,3 +127,25 @@ func TestWebSocketTargetsRegister(t *testing.T) {
 		t.Error("Lookup of an unregistered key succeeded")
 	}
 }
+
+// x/net joins a port-less Host with the default port as given, so a bracketed
+// IPv6 host became [[::1]]:443. The dial location carries the port for it.
+func TestDialLocationIPv6DefaultPort(t *testing.T) {
+	for raw, want := range map[string]string{
+		"wss://[::1]/ws":      "[::1]:443",
+		"ws://[::1]/ws":       "[::1]:80",
+		"wss://[::1]:8443/ws": "[::1]:8443",
+		"wss://h/ws":          "h",
+	} {
+		tg, err := ParseWebSocketTarget(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := dialLocation(tg).Host; got != want {
+			t.Errorf("dialLocation(%s).Host = %q, want %q", raw, got, want)
+		}
+	}
+	if tg, _ := ParseWebSocketTarget("wss://[::1]:443/ws"); tg.String() != "wss://[::1]/ws" {
+		t.Errorf("canonical text changed: %q", tg.String())
+	}
+}

@@ -3,6 +3,7 @@ package transport
 import (
 	"crypto/sha256"
 	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"strconv"
@@ -111,6 +112,22 @@ func (t WebSocketTarget) Host() string { return t.u.Host }
 func (t WebSocketTarget) URL() *url.URL {
 	c := *t.u
 	return &c
+}
+
+// dialLocation is the URL a dial to t uses: the canonical one, except that a
+// bracketed IPv6 host on its scheme's default port gets the port written out.
+// x/net/websocket adds a missing port by joining Host as given, which turns
+// "[::1]" into "[[::1]]:443". The canonical text (and so the key) is unchanged.
+func dialLocation(t WebSocketTarget) *url.URL {
+	u := t.URL()
+	if u.Port() == "" && strings.ContainsRune(u.Hostname(), ':') {
+		port := "443"
+		if u.Scheme == "ws" {
+			port = "80"
+		}
+		u.Host = net.JoinHostPort(u.Hostname(), port)
+	}
+	return u
 }
 
 // Key is the first 8 bytes of SHA-256 over the canonical text.
