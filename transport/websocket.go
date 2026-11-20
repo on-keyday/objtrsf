@@ -91,6 +91,18 @@ func (m *connectionMap) Delete(addr netip.AddrPort) {
 	delete(m.connMap, addr)
 }
 
+// setIfAbsent stores conn for addr unless addr already has a socket, which it
+// returns instead. A dial that lands second loses: see the send loop.
+func (m *connectionMap) setIfAbsent(addr netip.AddrPort, conn *WebSocketConn) (existing *WebSocketConn, stored bool) {
+	m.connMapLock.Lock()
+	defer m.connMapLock.Unlock()
+	if ex, ok := m.connMap[addr]; ok {
+		return ex, false
+	}
+	m.connMap[addr] = conn
+	return conn, true
+}
+
 // deleteIf removes addr's entry only while it is still conn, and reports
 // whether it did. A socket's teardown uses it so that a replacement dialed in
 // the meantime keeps its entry.
@@ -132,7 +144,7 @@ func (m *connectionMap) takeAt(want netip.AddrPort) []*WebSocketConn {
 func startTransportLoops(rawSess objproto.RawEndpoint,
 	connChan chan *WebSocketConn, connMap *connectionMap,
 	senderChannel <-chan *objproto.PacketData,
-	tlsConf *tls.Config, dialPath string, logger *slog.Logger) {
+	tlsConf *tls.Config, dialPath string, targets *WebSocketTargets, logger *slog.Logger) {
 
 	go func() {
 		for conn := range connChan {
@@ -183,15 +195,28 @@ func startTransportLoops(rawSess objproto.RawEndpoint,
 							}
 							wsScheme, httpScheme = "wss", "https"
 						}
+						location := &url.URL{Scheme: wsScheme, Host: pkt.To.Addr.String(), Path: dialPath}
+						if key, named := objproto.NamedFromAddrPort(pkt.To.Addr); named { // this leg carries only ws and wss
+							// A named address stands for a URL the leg was given:
+							// dial that, so the front sees its host name and path.
+							var t WebSocketTarget
+							ok := false
+							if targets != nil {
+								t, ok = targets.Lookup(key)
+							}
+							if !ok || t.Transport() != pkt.To.Transport {
+								logger.Error("no dial target for a named address",
+									slog.String("to", pkt.To.String()), slog.Bool("registered", ok))
+								rawSess.CannotSend(pkt)
+								return
+							}
+							location = t.URL()
+						}
 						conf := &websocket.Config{
-							Location: &url.URL{
-								Scheme: wsScheme,
-								Host:   pkt.To.Addr.String(),
-								Path:   dialPath,
-							},
+							Location: location,
 							Origin: &url.URL{
 								Scheme: httpScheme,
-								Host:   pkt.To.Addr.String(),
+								Host:   location.Host,
 							},
 							TlsConfig: tlsConf,
 							Version:   websocket.ProtocolVersionHybi13,
@@ -203,7 +228,21 @@ func startTransportLoops(rawSess objproto.RawEndpoint,
 							return
 						}
 						conn := newWebSocketConn(ws, pkt.To.Addr, wsScheme, func() {})
-						connMap.Set(pkt.To.Addr, conn)
+						// Every retransmit of a handshake that finds no socket starts
+						// a dial, so a dial slower than the retransmit interval has
+						// siblings. The first to land wins; a later one is closed
+						// unused and its packet goes out on the winner, where the
+						// peer reads it as a retransmit. Replacing the winner instead
+						// made the peer hold one connection per socket, and only
+						// the last socket set carried traffic.
+						if existing, stored := connMap.setIfAbsent(pkt.To.Addr, conn); !stored {
+							_ = ws.Close()
+							if err := existing.Send(pkt.Data); err != nil {
+								logger.Error("failed to send websocket handshake message", slog.String("to", pkt.To.String()), slog.String("error", err.Error()))
+								rawSess.CannotSend(pkt)
+							}
+							return
+						}
 						err = conn.Send(pkt.Data)
 						if err != nil {
 							logger.Error("failed to send websocket handshake message", slog.String("to", pkt.To.String()), slog.String("error", err.Error()))
@@ -342,7 +381,7 @@ func WebSocketEndpointEx(rawSess objproto.RawEndpoint, mux *http.ServeMux, cfg W
 		sendTo = rawSess.GetSenderChannel()
 	}
 	startTransportLoops(rawSess, connChan, connMap,
-		sendTo, cfg.TLS, dialPath, cfg.Logger)
+		sendTo, cfg.TLS, dialPath, cfg.Targets, cfg.Logger)
 	registerUnderlayCloser(rawSess, func(addr netip.AddrPort) bool {
 		taken := connMap.takeAt(addr)
 		for _, c := range taken {
