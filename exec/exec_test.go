@@ -156,3 +156,43 @@ func TestDetachIndex_Win32InputModeCtrlBracket(t *testing.T) {
 		})
 	}
 }
+
+// An app on the far side (Claude Code, Neovim, …) may push the kitty
+// keyboard protocol onto the operator's terminal, which then sends Ctrl+] as
+// a CSI-u sequence instead of 0x1d. Without this case the detach key was
+// forwarded to the app and the operator could not leave the session.
+func TestDetachIndex_KittyCSIuCtrlBracket(t *testing.T) {
+	jis := []byte("\x1b[93::92;5u") // captured from Windows Terminal on a JIS keyboard (alternate keys: base-layout key '\')
+	for _, tc := range []struct {
+		name      string
+		buf       []byte
+		wantStart int
+		wantEnd   int
+	}{
+		{"disambiguate only", []byte("\x1b[93;5u"), 0, len("\x1b[93;5u")},
+		{"alternate keys, JIS", jis, 0, len(jis)},
+		{"shifted key field", []byte("\x1b[93:125;5u"), 0, len("\x1b[93:125;5u")},
+		{"press event", []byte("\x1b[93;5:1u"), 0, len("\x1b[93;5:1u")},
+		{"repeat event", []byte("\x1b[93;5:2u"), 0, len("\x1b[93;5:2u")},
+		{"release ignored", []byte("\x1b[93;5:3u"), -1, -1},
+		{"associated text", []byte("\x1b[93;5;29u"), 0, len("\x1b[93;5;29u")},
+		{"caps lock held", []byte("\x1b[93;69u"), 0, len("\x1b[93;69u")},
+		{"num lock held", []byte("\x1b[93;133u"), 0, len("\x1b[93;133u")},
+		{"no ctrl ignored", []byte("\x1b[93u"), -1, -1},
+		{"ctrl+shift ignored", []byte("\x1b[93;6u"), -1, -1},
+		{"ctrl+alt ignored", []byte("\x1b[93;7u"), -1, -1},
+		{"other key ignored", []byte("\x1b[91;5u"), -1, -1},
+		{"mode push ignored", []byte("\x1b[>1u"), -1, -1},
+		{"after legit input", append([]byte("ab\x1b[97;5u"), jis...), len("ab\x1b[97;5u"), len("ab\x1b[97;5u") + len(jis)},
+		{"raw 0x1d wins if earlier", append([]byte{0x1d}, jis...), 0, 1},
+		{"csi-u wins if earlier", append(append([]byte{}, jis...), 0x1d), 0, len(jis)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gotStart, gotEnd := detachIndex(tc.buf)
+			if gotStart != tc.wantStart || gotEnd != tc.wantEnd {
+				t.Fatalf("detachIndex(%q) = (%d,%d), want (%d,%d)",
+					tc.buf, gotStart, gotEnd, tc.wantStart, tc.wantEnd)
+			}
+		})
+	}
+}

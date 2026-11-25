@@ -198,7 +198,7 @@ func (w *CommandExecutionStream) PumpTerminalIO(in io.Reader, out io.Writer) err
 
 // detachIndex scans buf for the first detach trigger and returns the
 // [start, end) byte range covering the trigger, or (-1, -1) if none is
-// present. Two encodings are recognised:
+// present. Three encodings are recognised:
 //
 //  1. The raw byte 0x1d (GS = Ctrl+]), which is the default delivery in
 //     every line-editing-disabled terminal mode (POSIX termios raw,
@@ -212,24 +212,94 @@ func (w *CommandExecutionStream) PumpTerminalIO(in io.Reader, out io.Writer) err
 //     Windows Terminal). Without case 2, Ctrl+] would be silently
 //     forwarded as the multi-byte CSI to the runner, defeating detach.
 //
+//  3. A kitty keyboard protocol (CSI-u) press or repeat of ']' with Ctrl
+//     as its only modifier: `ESC [ 93 [:shifted[:base]] ; 5[:event] [;text] u`.
+//     An app on the far side (Claude Code, Neovim, …) pushes the protocol
+//     onto the operator's terminal with `ESC [ > flags u`, and from then on
+//     the terminal sends Ctrl+] in this form, not as 0x1d. A detach leaves
+//     the app running, so nothing pops it until InputModeReset does on the
+//     way out — but while attached, without case 3 the detach key was
+//     forwarded to the app and the operator could not leave. Seen live on
+//     Windows Terminal with a JIS keyboard: `ESC[93::92;5u`.
+//
 // The earliest matching trigger wins. The (start, end) range is consumed
 // (i.e., not forwarded to the runner); the prefix [0, start) is forwarded
 // before the half-close.
 func detachIndex(buf []byte) (start, end int) {
-	rawIdx := bytes.IndexByte(buf, 0x1d)
-	winStart, winEnd := scanWin32InputDetach(buf)
-	switch {
-	case rawIdx < 0 && winStart < 0:
-		return -1, -1
-	case rawIdx < 0:
-		return winStart, winEnd
-	case winStart < 0:
-		return rawIdx, rawIdx + 1
-	case rawIdx <= winStart:
-		return rawIdx, rawIdx + 1
-	default:
-		return winStart, winEnd
+	start, end = -1, -1
+	pick := func(s, e int) {
+		if s >= 0 && (start < 0 || s < start) {
+			start, end = s, e
+		}
 	}
+	if i := bytes.IndexByte(buf, 0x1d); i >= 0 {
+		pick(i, i+1)
+	}
+	pick(scanWin32InputDetach(buf))
+	pick(scanKittyCSIuDetach(buf))
+	return start, end
+}
+
+// scanKittyCSIuDetach finds the first kitty keyboard protocol sequence in buf
+// that is a press or repeat of ']' (key code 93) with Ctrl as the only
+// modifier, Caps Lock and Num Lock aside. Returns the byte range of the whole
+// sequence, or (-1, -1). Like scanWin32InputDetach it consumes only the strict
+// shape — digits, ':' and ';' between `ESC [` and `u` — so a mode request
+// (`ESC [ > 1 u`) or any other CSI is left alone.
+func scanKittyCSIuDetach(buf []byte) (start, end int) {
+	const (
+		keyRightBracket = 93
+		modCtrl         = 4
+		modLocks        = 64 | 128 // Caps Lock, Num Lock: held state, not a chord
+		eventRelease    = 3
+		maxFieldsBytes  = 64
+	)
+	for i := 0; i+2 < len(buf); i++ {
+		if buf[i] != 0x1b || buf[i+1] != '[' {
+			continue
+		}
+		j := i + 2
+		limit := j + maxFieldsBytes
+		if limit > len(buf) {
+			limit = len(buf)
+		}
+		ok := false
+		for ; j < limit; j++ {
+			c := buf[j]
+			if c == 'u' {
+				ok = true
+				break
+			}
+			if c != ';' && c != ':' && (c < '0' || c > '9') {
+				break
+			}
+		}
+		if !ok || j == i+2 {
+			continue
+		}
+		fields := bytes.Split(buf[i+2:j], []byte{';'})
+		keys := bytes.Split(fields[0], []byte{':'})
+		key, err := strconv.Atoi(string(keys[0]))
+		if err != nil || key != keyRightBracket {
+			continue
+		}
+		mods, event := 1, 1
+		if len(fields) > 1 && len(fields[1]) > 0 {
+			me := bytes.Split(fields[1], []byte{':'})
+			if mods, err = strconv.Atoi(string(me[0])); err != nil {
+				continue
+			}
+			if len(me) > 1 {
+				if event, err = strconv.Atoi(string(me[1])); err != nil {
+					continue
+				}
+			}
+		}
+		if (mods-1)&^modLocks == modCtrl && event != eventRelease {
+			return i, j + 1
+		}
+	}
+	return -1, -1
 }
 
 // scanWin32InputDetach finds the first Win32 Input Mode keydown sequence

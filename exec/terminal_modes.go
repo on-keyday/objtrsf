@@ -99,6 +99,15 @@ const ScreenModeReset = "" +
 // remainder — `35;65;36M` — on every mouse movement. Reproduced by feeding
 // those exact bytes to a bash pty.
 //
+// The kitty keyboard protocol is a stack an app pushes onto with `ESC [ > f u`
+// and pops on its own exit. A detach is not the app's exit, so its entry stays
+// pushed on the operator's terminal, which then keeps sending Ctrl-modified
+// keys (Ctrl+] among them) as CSI-u: a shell attached next saw `92;5u`
+// self-inserted for Ctrl+]. Popping more entries than were pushed empties the
+// stack, which is what a fresh shell expects; a terminal without the protocol
+// ignores the sequence. A harness re-pushes the app's flags on the next attach
+// (its mode tracker), as it does for the DEC modes below.
+//
 // Reset unconditionally rather than from tracked state: the client does not
 // know what was set, resetting an unset mode is a no-op, and the point is to
 // leave the terminal in the state a fresh shell expects however it got here.
@@ -126,7 +135,8 @@ const InputModeReset = "" +
 	"\x1b[?1015l" + // urxvt mouse coordinates
 	"\x1b[?1016l" + // SGR-pixel mouse coordinates
 	"\x1b[?2004l" + // bracketed paste
-	"\x1b[?2031l" // colour-scheme change notifications
+	"\x1b[?2031l" + // colour-scheme change notifications
+	"\x1b[<99u" // kitty keyboard protocol: pop every pushed entry (flags back to 0)
 
 // WriteTerminalReset writes the full reset — both groups — to w.
 //

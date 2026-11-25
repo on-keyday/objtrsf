@@ -24,6 +24,7 @@ func TestWriteTerminalReset_EmitsBothGroups(t *testing.T) {
 		"\x1b[?1006l", // input group: SGR mouse reporting off
 		"\x1b[?2004l", // input group: bracketed paste off
 		"\x1b[?2031l", // input group: colour-scheme notifications off
+		"\x1b[<99u",   // input group: kitty keyboard protocol stack emptied
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("WriteTerminalReset output is missing %q", want)
